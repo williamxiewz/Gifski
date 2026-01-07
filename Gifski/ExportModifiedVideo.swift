@@ -10,7 +10,7 @@ struct ExportModifiedVideoView: View {
 	@Binding var isAudioWarningPresented: Bool
 
 	var body: some View {
-		ZStack{}
+		ZStack {} // Intentionally using this so it doesn't take up any space.
 			.sheet(isPresented: isProgressSheetPresented) {
 				ProgressView()
 			}
@@ -84,8 +84,7 @@ struct ExportModifiedVideoView: View {
 		)
 	}
 
-
-	enum Error: Swift.Error {
+	enum Error: LocalizedError {
 		case unableToExportAsset
 		case unableToCreateExportSession
 		case unableToAddCompositionTrack
@@ -103,29 +102,29 @@ struct ExportModifiedVideoView: View {
 	}
 }
 
-
-enum ExportModifiedVideoState: Equatable {
+enum ExportModifiedVideoState {
 	case idle
 	case exporting(Task<Void, Never>, videoIsOverTwentySeconds: Bool)
 	case finished(URL)
+}
 
-	var shouldShowProgress: Bool {
-		switch self {
-		case .idle, .finished:
-			false
-		case .exporting(_, videoIsOverTwentySeconds: let videoIsOverTwentySeconds):
-			videoIsOverTwentySeconds
-		}
-	}
-	var shouldShowFileExporter: Bool {
-		switch self {
-		case .idle, .exporting:
-			false
-		case .finished:
+extension ExportModifiedVideoState: Equatable {
+	static func == (lhs: Self, rhs: Self) -> Bool {
+		switch (lhs, rhs) {
+		case (.idle, .idle):
 			true
+		// Intentionally ignores Task identity - we only care about the exporting state, not which specific task.
+		case (.exporting(_, let lhsVideoIsOverTwentySeconds), .exporting(_, let rhsVideoIsOverTwentySeconds)):
+			lhsVideoIsOverTwentySeconds == rhsVideoIsOverTwentySeconds
+		case (.finished(let lhsURL), .finished(let rhsURL)):
+			lhsURL == rhsURL
+		default:
+			false
 		}
 	}
+}
 
+extension ExportModifiedVideoState {
 	var isExporting: Bool {
 		switch self {
 		case .exporting:
@@ -144,7 +143,6 @@ enum ExportModifiedVideoState: Equatable {
 		}
 	}
 }
-
 
 /**
 Convert a source video to an `.mp4` using the same scale, speed, and crop as the exported `.gif`.
@@ -181,7 +179,7 @@ func exportModifiedVideo(conversion: GIFGenerator.Conversion) async throws -> UR
 Creates the mutable composition along with the video track inserted.
 */
 private func createComposition(
-	conversion: GIFGenerator.Conversion,
+	conversion: GIFGenerator.Conversion
 ) async throws -> (AVMutableComposition, AVMutableCompositionTrack) {
 	let composition = AVMutableComposition()
 
@@ -204,22 +202,17 @@ private func createComposition(
 }
 
 /**
-Create an `AVMutableVideoComposition` that will scale, translate, and crop the `compositionVideoTrack`.
+Create an `AVVideoComposition` that will scale, translate, and crop the `compositionVideoTrack`.
 */
 private func createVideoComposition(
 	compositionVideoTrack: AVMutableCompositionTrack,
 	conversion: GIFGenerator.Conversion
-) async throws -> AVMutableVideoComposition {
-	let videoComposition = AVMutableVideoComposition()
+) async throws -> AVVideoComposition {
+	let renderSize = try await conversion.exportModifiedRenderRect.size
+	let frameDuration = try await compositionVideoTrack.load(.minFrameDuration)
 
-	videoComposition.renderSize = try await conversion.exportModifiedRenderRect.size
-	videoComposition.frameDuration = try await compositionVideoTrack.load(.minFrameDuration)
-
-	let instruction = AVMutableVideoCompositionInstruction()
 	// The instruction time range must be greater than or equal to the video and there is no penalty for making it longer, so add 1.0 second to the duration just to be safe
-	instruction.timeRange = CMTimeRange(start: .zero, duration: .init(seconds: try await conversion.videoWithoutBounceDuration.toTimeInterval + 1.0, preferredTimescale: .video))
-
-	let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+	let timeRange = CMTimeRange(start: .zero, duration: .init(seconds: try await conversion.videoWithoutBounceDuration.toTimeInterval + 1.0, preferredTimescale: .video))
 
 	// Layer instructions operate in natural space (unrotated). The crop rect from UI is in
 	// preferred space, so `cropRectAppliedToNaturalSize` transforms it back to natural space.
@@ -231,13 +224,23 @@ private func createVideoComposition(
 
 	// Place the crop rect in the top left corner.
 	let translateTransform = CGAffineTransform(translationX: -cropRectAfterPreferred.minX, y: -cropRectAfterPreferred.minY)
-	layerInstruction.setCropRectangle(cropRectAppliedToNaturalSize, at: .zero)
-	layerInstruction.setTransform(scaleTransform.concatenating(preferredTransform).concatenating(translateTransform), at: .zero)
-	instruction.layerInstructions = [layerInstruction]
 
+	var layerConfig = AVVideoCompositionLayerInstruction.Configuration(assetTrack: compositionVideoTrack)
+	layerConfig.setCropRectangle(cropRectAppliedToNaturalSize, at: .zero)
+	layerConfig.setTransform(scaleTransform.concatenating(preferredTransform).concatenating(translateTransform), at: .zero)
 
-	videoComposition.instructions = [instruction]
-	return videoComposition
+	let instructionConfig = AVVideoCompositionInstruction.Configuration(
+		layerInstructions: [AVVideoCompositionLayerInstruction(configuration: layerConfig)],
+		timeRange: timeRange
+	)
+
+	let config = AVVideoComposition.Configuration(
+		frameDuration: frameDuration,
+		instructions: [AVVideoCompositionInstruction(configuration: instructionConfig)],
+		renderSize: renderSize
+	)
+
+	return AVVideoComposition(configuration: config)
 }
 
 private struct ExportableMP4: Transferable {

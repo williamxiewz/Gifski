@@ -3,7 +3,7 @@ import AVFoundation
 
 struct EditScreen: View {
 	@Environment(AppState.self) private var appState
-	@State private var outputCropRect = CropRect.initialCropRect
+	@State private var outputCropRect = CropRect.initial
 	@State private var fullPreviewStream = FullPreviewStream()
 
 	var url: URL
@@ -61,7 +61,6 @@ private struct _EditScreen: View {
 	private let fullPreviewStream: FullPreviewStream
 	@State private var lastSpeed: Double?
 
-
 	init(
 		url: URL,
 		asset: AVAsset,
@@ -94,34 +93,34 @@ private struct _EditScreen: View {
 		.navigationTitle(url.lastPathComponent)
 		.navigationDocument(url)
 		.toolbar {
-			ToolbarItemGroup {
-				if fullPreviewState.isGenerating {
-					ProgressView(value: fullPreviewState.progress)
-						.progressViewStyle(.circular)
-						.controlSize(.mini)
-						.scaleEffect(0.8)
-						.overlay {
-							if let fullPreviewStateErrorMessage = fullPreviewState.errorMessage {
-								Color.clear
-									.popover(isPresented: .constant(true)) {
-										Text(fullPreviewStateErrorMessage)
-											.padding()
-											.frame(maxWidth: 300)
-									}
-							}
-						}
-				}
+			ToolbarSpacer(.fixed)
+			ToolbarItem {
 				Toggle(
 					"Preview",
 					systemImage: appState.shouldShowPreview && fullPreviewState.canShowPreview ? "eye" : "eye.slash",
 					isOn: appState.toggleMode(mode: .preview)
 				)
+				.overlay(alignment: .leading) {
+					if fullPreviewState.isGenerating {
+						ProgressView(value: fullPreviewState.progress)
+							.progressViewStyle(.circular)
+							.controlSize(.mini)
+							.scaleEffect(0.8)
+							.overlay {
+								if let fullPreviewStateErrorMessage = fullPreviewState.errorMessage {
+									Color.clear
+										.popover(isPresented: .constant(true)) {
+											Text(fullPreviewStateErrorMessage)
+												.padding()
+												.frame(maxWidth: 300)
+										}
+								}
+							}
+							.offset(x: -20)
+					}
+				}
 			}
-			// We have to use this as the glass background is buggy.
-			.ss_sharedBackgroundVisibility_hidden()
-			if #available(macOS 26, *) {
-				ToolbarSpacer(.fixed)
-			}
+			ToolbarSpacer(.fixed)
 			ToolbarItemGroup {
 				CropToolbarItems(
 					isCropActive: appState.toggleMode(mode: .editCrop),
@@ -130,7 +129,6 @@ private struct _EditScreen: View {
 				)
 				.focusSection()
 			}
-			.ss_sharedBackgroundVisibility_hidden()
 		}
 		.onReceive(Defaults.publisher(.outputSpeed, options: [])) { _ in
 			Debouncer.debounce(delay: .seconds(0.4)) {
@@ -159,17 +157,16 @@ private struct _EditScreen: View {
 		}
 		.onChange(of: bounceGIF) {
 			estimatedFileSizeModel.updateEstimate()
-		}
-		.onChange(of: frameRate) {
-			estimatedFileSizeModel.updateEstimate()
-			updatePreviewOnSettingsChange()
-		}
-		.onChange(of: bounceGIF) {
+
 			guard bounceGIF else {
 				return
 			}
 
 			showKeyframeRateWarningIfNeeded()
+		}
+		.onChange(of: frameRate) {
+			estimatedFileSizeModel.updateEstimate()
+			updatePreviewOnSettingsChange()
 		}
 		.alert2(
 			"Reverse Playback Preview Limitation",
@@ -439,7 +436,7 @@ enum PredefinedSizeItem: Hashable {
 		switch self {
 		case .dimensions(let dimensions):
 			dimensions
-		default:
+		case .custom, .spacer:
 			nil
 		}
 	}
@@ -448,7 +445,7 @@ enum PredefinedSizeItem: Hashable {
 private struct DimensionsSetting: View {
 	@State private var predefinedSizes = [PredefinedSizeItem]()
 	@State private var selectedPredefinedSize: PredefinedSizeItem?
-	@State private var dimensionsType = DimensionsType.pixels
+	@State private var dimensionsType = DimensionType.pixels
 	@State private var width = 0
 	@State private var height = 0
 	@State private var percent = 0
@@ -466,8 +463,7 @@ private struct DimensionsSetting: View {
 						if selectedPredefinedSize == .custom {
 							let string = switch dimensionsType {
 							case .pixels:
-								// TODO: Make this a property on `resizableDimensions`.
-								String(format: "%.0f%%", resizableDimensions.percent * 100)
+								resizableDimensions.percentFormatted
 							case .percent:
 								resizableDimensions.pixels.formatted
 							}
@@ -491,7 +487,7 @@ private struct DimensionsSetting: View {
 				HStack {
 					switch dimensionsType {
 					case .pixels:
-						let textFieldWidth = OS.isMacOS26OrLater ? 44 : 42.0
+						let textFieldWidth = 44.0
 						HStack(spacing: 4) {
 							LabeledContent("Width") {
 								IntTextField(
@@ -546,7 +542,7 @@ private struct DimensionsSetting: View {
 									}
 								}
 							)
-							.frame(width: OS.isMacOS26OrLater ? 36 : 32)
+							.frame(width: 36)
 							.onChange(of: percent) {
 								applyPercent()
 							}
@@ -555,7 +551,7 @@ private struct DimensionsSetting: View {
 				}
 				.padding(.trailing, -8)
 				Picker("Dimension type", selection: $dimensionsType) {
-					ForEach(DimensionsType.allCases, id: \.self) {
+					ForEach(DimensionType.allCases, id: \.self) {
 						Text($0.rawValue)
 					}
 				}
@@ -653,6 +649,7 @@ private struct DimensionsSetting: View {
 	private func applyWidth() {
 		resizableDimensions = resizableDimensions.aspectResized(usingWidth: width.toDouble)
 		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
+		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: true)
 	}
 
 	private func applyHeight() {
@@ -698,9 +695,9 @@ private struct DimensionsSetting: View {
 	private func showArrowKeyTipIfNeeded() {
 		SSApp.runOnce(identifier: "DimensionsSetting_arrowKeyTip") {
 			Task {
-				try? await Task.sleep(for: .seconds(1))
+				try await Task.sleep(for: .seconds(1))
 				isArrowKeyTipPresented = true
-				try? await Task.sleep(for: .seconds(10))
+				try await Task.sleep(for: .seconds(10))
 				isArrowKeyTipPresented = false
 			}
 		}

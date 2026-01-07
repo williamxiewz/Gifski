@@ -117,7 +117,7 @@ struct CropOverlayView: View {
 
 		∞. ` accessHostingWindow` and `onChange` are never called because SwiftUI does not build the view again when disappearing
 
-		I need a custom setter to capture all changes before the the view disappears, and I can't use `accessHostingWindow` or `onChange(of:)` or `onDisappear`
+		I need a custom setter to capture all changes before the view disappears, and I can't use `accessHostingWindow` or `onChange(of:)` or `onDisappear`
 		*/
 		.bindHostingWindow(
 			.init(
@@ -129,10 +129,14 @@ struct CropOverlayView: View {
 						return
 					}
 
+					// Capture old window before updating the reference.
+					let oldWindow = window
+
 					// Defer window property modifications to avoid circular updates during view lifecycle
 					DispatchQueue.main.async {
+						// Restore the old window's isMovableByWindowBackground to its original value.
 						if let windowIsMovable {
-							window?.isMovableByWindowBackground = windowIsMovable
+							oldWindow?.isMovableByWindowBackground = windowIsMovable
 						}
 
 						windowIsMovable = newWindow?.isMovableByWindowBackground
@@ -199,7 +203,7 @@ struct CropOverlayView: View {
 
 		var body: some View {
 			Group {
-				if [.top, .left, .right, .bottom].contains(position) {
+				if position.isEdge {
 					SideHandleView(
 						cropFrame: cropFrame,
 						position: position

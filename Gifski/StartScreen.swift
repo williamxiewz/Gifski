@@ -12,6 +12,7 @@ struct StartScreen: View {
 			Button("Open") {
 				appState.isFileImporterPresented = true
 			}
+			.buttonStyle(.glass)
 		}
 		.font(.title3)
 		.controlSize(.extraLarge)

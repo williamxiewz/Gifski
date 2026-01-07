@@ -3,7 +3,7 @@ import CoreMedia
 import AVFoundation
 
 /**
-When creating a full preview, you don't need the some setting such as loop or bounce, plus it has additional info like asset duration and speed.
+When creating a full preview, you don't need some settings such as loop or bounce, plus it has additional info like asset duration and speed.
 */
 struct SettingsForFullPreview: Equatable, Sendable {
 	let conversion: SendableConversion

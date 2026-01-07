@@ -11,7 +11,7 @@ struct CropRect: Equatable {
 }
 
 extension CropRect {
-	static let initialCropRect = Self(x: 0, y: 0, width: 1, height: 1)
+	static let initial = Self(x: 0, y: 0, width: 1, height: 1)
 
 	init(
 		x: Double,
@@ -229,7 +229,7 @@ extension CropRect {
 	}
 
 	/**
-	Returns a new `CGRect` trying to expand or shrink the size. If the size is within the video bounds it will expand, otherwise it will change the center position and expand)
+	Returns a new `CGRect` trying to expand or shrink the size. If the size is within the video bounds it will expand, otherwise it will change the center position and expand.
 	*/
 	func changeSize(size: UnitSize, minSize: UnitSize) -> Self {
 		var out = Self(x: 0.0, y: 0.0, width: 0.0, height: 0.0)
@@ -564,7 +564,7 @@ extension CropRect {
 	}
 
 	/**
-	For  `applyScale`.
+	For `applyScale`.
 	*/
 	static func scaleAnchorPoint(
 		origin: Double,
@@ -643,8 +643,8 @@ extension DragGesture.Value {
 	*/
 	func locationInside(frame: CGRect) -> UnitPoint {
 		.init(
-			x: location.x.clamped(from: frame.minX, to: frame.maxX) / frame.width,
-			y: location.y.clamped(from: frame.minY, to: frame.maxY) / frame.height
+			x: frame.width > 0 ? location.x.clamped(from: frame.minX, to: frame.maxX) / frame.width : 0,
+			y: frame.height > 0 ? location.y.clamped(from: frame.minY, to: frame.maxY) / frame.height : 0
 		)
 	}
 }

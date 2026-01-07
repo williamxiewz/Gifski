@@ -187,6 +187,11 @@ extension FullPreviewGenerationEvent.FullPreview {
 	}
 
 	private func getCurrentGIFIndex(at compositionTime: CMTime) -> Int {
+		guard !gifData.isEmpty else {
+			assertionFailure("gifData should not be empty when getting GIF index")
+			return 0
+		}
+
 		let timeRangeInOriginalSpeed = settings.conversion.timeRange ?? (0...settings.assetDuration)
 
 		let gifTimeInOriginalSpeed = originalCompositionTime(from: compositionTime) - timeRangeInOriginalSpeed.lowerBound

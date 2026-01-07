@@ -71,8 +71,7 @@ extension PreviewRenderer {
 	func convertToASTCTexture(cgImage: CGImage) throws -> SendableTexture {
 		let astcData = try cgImage.convertToData(
 			withNewType: "org.khronos.astc",
-			// TODO: Use https://developer.apple.com/documentation/imageio/kcgimagepropertyastcblocksize8x8?changes=lat_7_3 when targeting macOS 26.
-			addOptions: ["kCGImagePropertyASTCBlockSize": 0x88]
+			addOptions: [kCGImagePropertyASTCBlockSize as String: kCGImagePropertyASTCBlockSize8x8]
 		)
 
 		return try metalDevice.convertToASTCTexture(isolated: self, astcData: astcData)

@@ -10,7 +10,7 @@ final class PreviewableComposition: AVMutableComposition {
 		case couldNotCreateTracks
 	}
 
-	let videoComposition = AVMutableVideoComposition()
+	private(set) var videoComposition: AVVideoComposition!
 
 	init(extractPreviewableCompositionFrom asset: AVAsset) async throws {
 		super.init()
@@ -36,16 +36,22 @@ final class PreviewableComposition: AVMutableComposition {
 			at: .videoZero
 		)
 
-		let instruction = AVMutableVideoCompositionInstruction()
-		instruction.timeRange = CMTimeRange(start: .videoZero, duration: duration)
-		instruction.layerInstructions = [AVMutableVideoCompositionLayerInstruction(assetTrack: compositionOriginalTrack)]
-
 		// Render size in preferred space (rotated) so preview displays correctly.
 		let rotatedRect = CGRect(origin: .zero, size: trackSize).applying(preferredTransform)
+		let renderSize = CGSize(width: abs(rotatedRect.width), height: abs(rotatedRect.height))
+		let timeRange = CMTimeRange(start: .videoZero, duration: duration)
 
-		videoComposition.frameDuration = frameDuration
-		videoComposition.renderSize = CGSize(width: abs(rotatedRect.width), height: abs(rotatedRect.height))
-		videoComposition.instructions = [instruction]
-		videoComposition.customVideoCompositorClass = PreviewVideoCompositor.self
+		let layerConfig = AVVideoCompositionLayerInstruction.Configuration(assetTrack: compositionOriginalTrack)
+		let instructionConfig = AVVideoCompositionInstruction.Configuration(
+			layerInstructions: [AVVideoCompositionLayerInstruction(configuration: layerConfig)],
+			timeRange: timeRange
+		)
+		let config = AVVideoComposition.Configuration(
+			customVideoCompositorClass: PreviewVideoCompositor.self,
+			frameDuration: frameDuration,
+			instructions: [AVVideoCompositionInstruction(configuration: instructionConfig)],
+			renderSize: renderSize
+		)
+		videoComposition = AVVideoComposition(configuration: config)
 	}
 }

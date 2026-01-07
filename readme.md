@@ -21,10 +21,11 @@ Gifski has a bunch of settings like changing dimensions, speed, frame rate, qual
 
 [![](https://sindresorhus.com/assets/download-on-app-store-badge.svg)](https://apps.apple.com/app/id1351639930)
 
-Requires macOS 14 or later.
+Requires macOS 26 or later.
 
 **Older versions**
 
+- TODO
 - [2.23.0](https://github.com/sindresorhus/Gifski/releases/download/v2.23.0/Gifski.2.23.0.-.macOS.13.zip) for macOS 13+
 - [2.22.3](https://github.com/sindresorhus/Gifski/releases/download/v2.22.3/Gifski.2.22.3.-.macOS.12.zip) for macOS 12+
 - [2.21.2](https://github.com/sindresorhus/Gifski/releases/download/v2.21.2/Gifski.2.21.2.-.macOS.11.zip) for macOS 11+
@@ -36,7 +37,7 @@ Requires macOS 14 or later.
 
 A special version for users that cannot access the App Store. It won't receive automatic updates. I will update it here once a year.
 
-[Download](https://github.com/sindresorhus/meta/files/13539147/Gifski-2.23.0-1692807940.zip) *(2.23.0 · macOS 13+)*
+[Download]() *(3.0.0 · macOS 26+)*
 
 ## Features
 

@@ -54,15 +54,13 @@ struct ConversionScreen: View {
 			do {
 				try await convert()
 			} catch {
-				if !(error is CancellationError) {
-					print("Conversion error:", error)
-					appState.error = error
+				guard !error.isCancelled else {
+					return
 				}
 
-				// So it doesn't get triggered when we press Escape to cancel.
-				if !Task.isCancelled {
-					dismiss()
-				}
+				print("Conversion error:", error)
+				appState.error = error
+				dismiss()
 			}
 		}
 		.activity(options: .userInitiated, reason: "Converting")

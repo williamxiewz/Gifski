@@ -71,22 +71,7 @@ struct CompletedScreen: View {
 			isPresented: $isCopyWarning2Presented
 		)
 		.toolbar {
-			ToolbarItem(placement: .principal) {
-				HStack(spacing: 8) {
-					Text("\(url.filename)")
-//					Text("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.gif")
-						.frame(maxWidth: 200)
-						.truncationMode(.middle)
-					Text("·")
-					Text(url.fileSizeFormatted)
-				}
-				.font(.system(weight: .medium, design: .rounded))
-				.foregroundStyle(.secondary)
-			}
-			.ss_sharedBackgroundVisibility_hidden()
-			ToolbarItem {
-				Spacer()
-			}
+			ToolbarSpacer(.fixed)
 			ToolbarItem(placement: .primaryAction) {
 				Button("New Conversion", systemImage: "plus") {
 					appState.isFileImporterPresented = true
@@ -96,9 +81,9 @@ struct CompletedScreen: View {
 				}
 			}
 		}
-//		.navigationTitle(url.filename) // TODO
-//		.navigationSubtitle(url.fileSizeFormatted)
-		.navigationTitle("")
+		.navigationTitle(url.filename)
+		.navigationSubtitle(url.fileSizeFormatted)
+//		.navigationDocument(url) // Doesn't show title (macOS 26.2)
 		.task {
 			withAnimationWhenNotReduced {
 				isShowingContent = true
@@ -114,30 +99,31 @@ struct CompletedScreen: View {
 
 	private var controls: some View {
 		HStack(spacing: 32) {
-			// TODO: We cannot use controlgroup as the sharelink doesn't work then. (macOS 14.0)
-//			ControlGroup {
-			Button("Save") {
+			Button("Save", systemImage: "square.and.arrow.down") {
 				isFileExporterPresented = true
 			}
-				.keyboardShortcut("s")
+			.keyboardShortcut("s")
+			.help("Save")
 			CopyButton {
-				copy(url)
+				copyToClipboard(url)
 			}
-				.keyboardShortcut("c")
+			.keyboardShortcut("c")
+			.help("Copy")
 			ShareLink("Share", item: url)
 				// TODO: Document this shortcut.
 				.keyboardShortcut("s", modifiers: [.command, .shift])
+				.help("Share")
 		}
-		.labelStyle(.titleOnly)
+		.labelStyle(.iconOnly)
 		.controlSize(.extraLarge)
 		.buttonStyle(.equalWidth(.constant(0), minimumWidth: 80))
-//		.background(.regularMaterial) // Enable if using controlgroup again.
+		.buttonStyle(.glass)
 		.frame(width: 300)
 		.padding()
 		.opacity(isShowingContent ? 1 : 0)
 	}
 
-	private func copy(_ url: URL) {
+	private func copyToClipboard(_ url: URL) {
 		NSPasteboard.general.with {
 			// swiftlint:disable:next legacy_objc_type
 			$0.writeObjects([url as NSURL])
@@ -177,9 +163,9 @@ struct CompletedScreen: View {
 	private func showDragTipIfNeeded() {
 		SSApp.runOnce(identifier: "CompletedScreen_dragTip") {
 			Task {
-				try? await Task.sleep(for: .seconds(1))
+				try await Task.sleep(for: .seconds(1))
 				isDragTipPresented = true
-				try? await Task.sleep(for: .seconds(10))
+				try await Task.sleep(for: .seconds(10))
 				isDragTipPresented = false
 			}
 		}

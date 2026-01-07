@@ -94,6 +94,7 @@ only_rules:
   - operator_usage_whitespace
   - optional_data_string_conversion
   - overridden_super_call
+  - prefer_asset_symbols
   - prefer_condition_list
   - prefer_key_path
   - prefer_self_in_static_references
@@ -199,7 +200,7 @@ redundant_type_annotation:
 unneeded_override:
   affect_initializers: true
 deployment_target:
-  macOS_deployment_target: '14'
+  macOS_deployment_target: '26'
 custom_rules:
   no_nsrect:
     regex: '\bNSRect\b'

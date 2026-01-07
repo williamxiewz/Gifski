@@ -88,7 +88,7 @@ struct TrimmingAVPlayer: NSViewControllerRepresentable {
 		}
 
 		if shouldShowPreview {
-			item.videoComposition = assetVideoComposition.mutableCopy() as? AVMutableVideoComposition
+			item.videoComposition = assetVideoComposition
 		} else {
 			// Clear video composition so AVPlayer handles rotation normally.
 			item.videoComposition = nil
@@ -292,6 +292,7 @@ final class TrimmingAVPlayerViewController: NSViewController {
 			}
 			.store(in: &cancellables)
 	}
+
 	func onNewDurationRange(durationRange newItemDurationRange: ClosedRange<Double>?) {
 		guard let newItemDurationRange else {
 			currentItemDurationRange = nil
@@ -302,7 +303,8 @@ final class TrimmingAVPlayerViewController: NSViewController {
 		}
 		guard
 			let timeRange,
-			let currentItemDurationRange else {
+			let currentItemDurationRange
+		else {
 			self.timeRange = newItemDurationRange
 			timeRangeDidChange?(newItemDurationRange)
 			return
@@ -324,6 +326,7 @@ final class TrimmingAVPlayerViewController: NSViewController {
 final class TrimmingAVPlayerView: AVPlayerView {
 	private var timeRangeCancellable: AnyCancellable?
 	private var trimmingCancellable: AnyCancellable?
+	private var readyForDisplayCancellable: AnyCancellable?
 
 	/**
 	The minimum duration the trimmer can be set to.
@@ -370,12 +373,28 @@ final class TrimmingAVPlayerView: AVPlayerView {
 		trimmingCancellable = Task {
 			do {
 				try await activateTrimming()
-				addCheckerboardView()
 				hideTrimButtons()
 				window?.makeFirstResponder(self)
-			} catch {}
+			} catch is CancellationError {
+				// Task was cancelled, ignore.
+			} catch {
+				assertionFailure("Failed to activate trimming: \(error)")
+			}
 		}
 		.toCancellable
+
+		observeReadyForDisplay()
+	}
+
+	private func observeReadyForDisplay() {
+		// Wait for the video to be ready for display before adding the checkerboard,
+		// ensuring videoBounds is valid.
+		readyForDisplayCancellable = publisher(for: \.isReadyForDisplay)
+			.first(where: \.self)
+			.receive(on: DispatchQueue.main)
+			.sink { [weak self] _ in
+				self?.addCheckerboardView()
+			}
 	}
 
 	fileprivate func setPlayPauseButton(isEnabled: Bool) {
@@ -444,10 +463,18 @@ final class TrimmingAVPlayerView: AVPlayerView {
 	}
 
 	fileprivate func addCheckerboardView() {
+		// Remove any existing checkerboard view to prevent stacking multiple on top of each other.
+		for subview in contentOverlayView?.subviews ?? [] where subview.identifier == Self.checkerboardViewIdentifier {
+			subview.removeFromSuperview()
+		}
+
 		let overlayView = NSHostingView(rootView: CheckerboardView(clearRect: videoBounds))
+		overlayView.identifier = Self.checkerboardViewIdentifier
 		contentOverlayView?.addSubview(overlayView)
 		overlayView.constrainEdgesToSuperview()
 	}
+
+	private static let checkerboardViewIdentifier = NSUserInterfaceItemIdentifier("CheckerboardView")
 
 	/**
 	Prevent user from dismissing trimming view.

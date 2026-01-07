@@ -44,6 +44,15 @@ enum CropHandlePosition: CaseIterable {
 		}
 	}
 
+	var isEdge: Bool {
+		switch self {
+		case .top, .left, .right, .bottom:
+			true
+		case .topLeft, .topRight, .bottomLeft, .bottomRight, .center:
+			false
+		}
+	}
+
 	var sides: RectSides {
 		switch self {
 		case .top:
@@ -67,31 +76,37 @@ enum CropHandlePosition: CaseIterable {
 		}
 	}
 
-	private var pointerPosition: FrameResizePosition {
-		Self.positionToPointer[self] ?? .top
+	private var frameResizePosition: FrameResizePosition {
+		switch self {
+		case .top:
+			.top
+		case .topRight:
+			.topTrailing
+		case .right:
+			.trailing
+		case .bottomRight:
+			.bottomTrailing
+		case .bottom:
+			.bottom
+		case .bottomLeft:
+			.bottomLeading
+		case .left:
+			.leading
+		case .topLeft:
+			.topLeading
+		case .center:
+			.top // Unused since center uses grabIdle style instead.
+		}
 	}
-
-	private static let positionToPointer: [Self: FrameResizePosition] = [
-		.top: .top,
-		.topRight: .topTrailing,
-		.right: .trailing,
-		.bottomRight: .bottomTrailing,
-		.bottom: .bottom,
-		.bottomLeft: .bottomLeading,
-		.left: .leading,
-		.topLeft: .topLeading,
-		.center: .top
-	]
 
 	var pointerStyle: PointerStyle {
 		if self == .center {
 			return .grabIdle
 		}
 
-		return .frameResize(position: pointerPosition)
+		return .frameResize(position: frameResizePosition)
 	}
 }
-
 
 struct RectSides: Equatable, Hashable {
 	let horizontal: Side
@@ -121,7 +136,6 @@ struct RectSides: Equatable, Hashable {
 		.init(x: horizontal.location, y: vertical.location)
 	}
 }
-
 
 /**
 A position on a rectangle.

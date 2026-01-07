@@ -72,7 +72,7 @@ final class AppState {
 	var error: Error?
 
 	init() {
-		DockProgress.style = .squircle(color: .white.withAlphaComponent(0.7))
+		DockProgress.style = .squircle(color: .white.opacity(0.7))
 
 		DispatchQueue.main.async { [self] in
 			didLaunch()
@@ -87,10 +87,14 @@ final class AppState {
 	}
 
 	func start(_ url: URL) {
+		// We intentionally do not call `stop` on this one later for simplicity since we will never get a lot of files.
 		_ = url.startAccessingSecurityScopedResource()
 
 		// We have to nil it out first and dispatch, otherwise it shows the old video. (macOS 14.3)
 		navigationPath = []
+
+		// Reset mode to prevent the new EditScreen from inheriting preview/crop state.
+		mode = .normal
 
 		Task { [self] in
 			do {
@@ -132,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		LaunchCompletions.applicationDidLaunch()
 	}
 
-	// TODO: Try to migrate to `.onOpenURL` when targeting macOS 15.
+	// Using AppDelegate instead of `.onOpenURL` because we need to handle multiple URLs at once to reject multi-file drops with a user-friendly error.
 	func application(_ application: NSApplication, open urls: [URL]) {
 		guard
 			urls.count == 1,
@@ -140,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		else {
 			NSAlert.showModal(
 				for: SSApp.swiftUIMainWindow,
-				title: "Gifski can only convert a single file at the time."
+				title: "Gifski can only convert a single file at a time."
 			)
 
 			return
@@ -191,8 +195,6 @@ extension AppState {
 			return
 		}
 
-		Task {
-			start(url)
-		}
+		start(url)
 	}
 }

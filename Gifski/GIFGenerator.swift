@@ -102,7 +102,7 @@ actor GIFGenerator {
 					.flatten()
 			}
 
-			sizeMultiplierForEstimation = Double(originalCount) / Double(times.count)
+			sizeMultiplierForEstimation = times.isEmpty ? 1.0 : Double(originalCount) / Double(times.count)
 		}
 
 		let totalFrameCount = totalFrameCount(for: conversion, sourceFrameCount: times.count)
@@ -119,7 +119,7 @@ actor GIFGenerator {
 		// TODO: Does it handle cancellation?
 
 		var index = 0
-		var previousTime = -100.0 // Just to make sure it doesn't match any timestamp.
+		var previousTime = -Double.infinity // Ensures the first frame always passes.
 
 		print("Total frame count:", totalFrameCount)
 
@@ -241,18 +241,25 @@ actor GIFGenerator {
 //			value: asset.debugInfo
 //		)
 
-		// TODO: Parallelize using `async let`.
-		guard
-			try await asset.load(.isReadable),
-			let assetFrameRate = try await asset.frameRate,
-			let firstVideoTrack = try await asset.firstVideoTrack,
+		// Parallelize independent loads.
+		async let isReadableCheck = asset.load(.isReadable)
+		async let frameRateCheck = asset.frameRate
+		async let firstVideoTrackCheck = asset.firstVideoTrack
 
-			// We use the duration of the first video track since the total duration of the asset can actually be longer than the video track. If we use the total duration and the video is shorter, we'll get errors in `generateCGImagesAsynchronously` (#119).
-			// We already extract the video into a new asset in `VideoValidator` if the first video track is shorter than the asset duration, so the handling here is not strictly necessary but kept just to be safe.
-			let videoTrackRange = try await firstVideoTrack.load(.timeRange).range
+		guard
+			try await isReadableCheck,
+			let assetFrameRate = try await frameRateCheck,
+			let firstVideoTrack = try await firstVideoTrackCheck
 		else {
 			// This can happen if the user selects a file, and then the file becomes
 			// unavailable or deleted before the "Convert" button is clicked.
+			throw Error.unreadableFile
+		}
+
+		// We use the duration of the first video track since the total duration of the asset can actually be longer than the video track. If we use the total duration and the video is shorter, we'll get errors in `generateCGImagesAsynchronously` (#119).
+		// We already extract the video into a new asset in `VideoValidator` if the first video track is shorter than the asset duration, so the handling here is not strictly necessary but kept just to be safe.
+		let (timeRange, timescale) = try await firstVideoTrack.load(.timeRange, .naturalTimeScale)
+		guard let videoTrackRange = timeRange.range else {
 			throw Error.unreadableFile
 		}
 //
@@ -284,7 +291,6 @@ actor GIFGenerator {
 		let startTime = videoRange.lowerBound
 		let duration = videoRange.length
 		let frameCount = Int(duration * frameRate)
-		let timescale = try await firstVideoTrack.load(.naturalTimeScale) // TODO: Move this to the other `load` call.
 
 		print("Video frame count:", frameCount)
 
@@ -304,7 +310,7 @@ actor GIFGenerator {
 		// We don't do this when "bounce" is enabled as the bounce calculations are not able to handle this.
 		if !conversion.bounce {
 			// Ensure we include the last frame. For example, the above might have calculated `[..., 6.25, 6.3]`, but the duration is `6.3647`, so we might miss the last frame if it appears for a short time.
-			frameForTimes.append(CMTime(seconds: duration, preferredTimescale: timescale))
+			frameForTimes.append(CMTime(seconds: startTime + duration, preferredTimescale: timescale))
 		}
 //
 //		record(
@@ -349,7 +355,7 @@ actor GIFGenerator {
 
 extension GIFGenerator {
 	/**
-	- Parameter frameRate: Clamped to `5...30`. Uses the frame rate of `input` if not specified.
+	- Parameter frameRate: Clamped to `Constants.allowedFrameRate` (3...50). Uses the frame rate of `input` if not specified.
 	- Parameter loopGif: Whether output should loop infinitely or not.
 	- Parameter bounce: Whether output should bounce or not.
 	*/
@@ -451,7 +457,7 @@ extension GIFGenerator.Conversion {
 	*/
 	var cropRectInPixels: CGRect {
 		get async throws {
-			(crop ?? .initialCropRect).unnormalize(forDimensions: try await renderSize)
+			(crop ?? .initial).unnormalize(forDimensions: try await renderSize)
 		}
 	}
 
@@ -473,7 +479,7 @@ extension GIFGenerator.Conversion {
 			let rotatedDimensions = CGSize(width: abs(rotatedSize.width), height: abs(rotatedSize.height))
 
 			// The crop rect is defined in rotated space, so unnormalize it using rotated dimensions
-			let cropRectInRotatedSpace = (crop ?? .initialCropRect).unnormalize(forDimensions: rotatedDimensions)
+			let cropRectInRotatedSpace = (crop ?? .initial).unnormalize(forDimensions: rotatedDimensions)
 
 			// Transform the crop rect from rotated space back to natural space
 			return cropRectInRotatedSpace.applying(preferredTransform.inverted())

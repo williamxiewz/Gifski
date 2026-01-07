@@ -74,7 +74,3 @@ class ExtensionController: NSViewController { // swiftlint:disable:this final_cl
 
 	func run(_ context: NSExtensionContext) async throws -> [NSExtensionItem] { [] }
 }
-
-
-// TODO: Check if any of these can be removed when targeting macOS 15.
-extension NSItemProvider: @retroactive @unchecked Sendable {}

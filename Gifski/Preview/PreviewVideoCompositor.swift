@@ -59,7 +59,7 @@ final class PreviewVideoCompositor: NSObject, AVVideoCompositing {
 
 				asyncVideoCompositionRequest.finish(withComposedVideoFrame: outputFrame)
 			} catch {
-				assertionFailure()
+				assertionFailure("Failed to render preview frame: \(error)")
 
 				try? await PreviewRenderer.shared.renderOriginal(
 					from: originalFrame.previewSendable,

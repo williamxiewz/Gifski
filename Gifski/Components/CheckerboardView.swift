@@ -32,12 +32,15 @@ struct CheckerboardView: View {
 					}
 				}
 			}
-			// TODO: Any way to do this directly in the `Canvas`?
+			// Note: This overlay is needed because Canvas doesn't support blend modes for individual shapes.
 			if let clearRect {
 				Rectangle()
 					.fill(.black)
 					.frame(width: clearRect.width, height: clearRect.height)
 					.blendMode(.destinationOut)
+					// Position at the video bounds center. Without this, the rectangle
+					// would be centered in the ZStack, which is wrong for letterboxed videos.
+					.position(x: clearRect.midX, y: clearRect.midY)
 			}
 		}
 		.compositingGroup()

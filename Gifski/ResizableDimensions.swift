@@ -1,12 +1,12 @@
 import CoreGraphics
 import AppIntents
 
-enum DimensionsType: String, Equatable, CaseIterable {
+enum DimensionType: String, Equatable, CaseIterable {
 	case pixels
 	case percent
 }
 
-extension DimensionsType: AppEnum {
+extension DimensionType: AppEnum {
 	static let typeDisplayRepresentation: TypeDisplayRepresentation = "Dimension Type"
 
 	static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
@@ -45,6 +45,13 @@ extension Dimensions {
 		case .percent(let value, _):
 			return value
 		}
+	}
+
+	/**
+	The percent value formatted as a percentage string (e.g., "75%").
+	*/
+	var percentFormatted: String {
+		String(format: "%.0f%%", percent * 100)
 	}
 
 	var isPercent: Bool {
@@ -93,6 +100,13 @@ extension Dimensions {
 		case .pixels(_, let originalSize):
 			return .pixels(newSize, originalSize: originalSize)
 		case .percent(_, let originalSize):
+			guard
+				originalSize.width > 0,
+				originalSize.height > 0
+			else {
+				return self
+			}
+
 			let newWidthPercent = (newSize.width / originalSize.width) * 100
 			let newHeightPercent = (newSize.height / originalSize.height) * 100
 			let averagePercent = (newWidthPercent + newHeightPercent) / 2
@@ -120,16 +134,18 @@ extension Dimensions: CustomStringConvertible {
 extension Dimensions {
 	func aspectResized(usingWidth width: Double) -> Self {
 		switch self {
-		case .pixels(let originalValue, let originalSize):
-			print("ORIGINAL", originalSize, originalValue)
-			guard originalSize.width != .zero else {
+		case .pixels(_, let originalSize):
+			guard originalSize.width > 0 else {
 				return self
 			}
 
 			let newHeight = originalSize.height * (width / originalSize.width)
 			return .pixels(CGSize(width: width, height: newHeight).rounded(), originalSize: originalSize)
 		case .percent(_, let originalSize):
-			print("ORIGINAL2", originalSize)
+			guard originalSize.width > 0 else {
+				return self
+			}
+
 			let newPercent = width / originalSize.width
 			return .percent(newPercent, originalSize: originalSize)
 		}
@@ -138,13 +154,17 @@ extension Dimensions {
 	func aspectResized(usingHeight height: Double) -> Self {
 		switch self {
 		case .pixels(_, let originalSize):
-			guard originalSize.height != .zero else {
+			guard originalSize.height > 0 else {
 				return self
 			}
 
 			let newWidth = originalSize.width * (height / originalSize.height)
 			return .pixels(CGSize(width: newWidth, height: height).rounded(), originalSize: originalSize)
 		case .percent(_, let originalSize):
+			guard originalSize.height > 0 else {
+				return self
+			}
+
 			let newPercent = height / originalSize.height
 			return .percent(newPercent, originalSize: originalSize)
 		}

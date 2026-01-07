@@ -1,7 +1,5 @@
 import SwiftUI
 
-// TODO: This does not correctly prevent larger numbers than `minMax`.
-
 struct IntTextField: NSViewRepresentable {
 	typealias NSViewType = IntTextFieldCocoa
 
@@ -154,11 +152,18 @@ final class IntTextFieldCocoa: NSTextField, NSTextFieldDelegate, NSControlTextEd
 	}
 
 	func controlTextDidEndEditing(_ object: Notification) {
-		if !isValid(integerValue) {
-			indicateValidationFailure(invalidValue: integerValue)
+		var finalValue = integerValue
+
+		if
+			let minMax,
+			!minMax.contains(finalValue)
+		{
+			indicateValidationFailure(invalidValue: finalValue)
+			finalValue = finalValue.clamped(to: minMax)
+			stringValue = "\(finalValue)"
 		}
 
-		onBlur?(integerValue)
+		onBlur?(finalValue)
 	}
 
 	func indicateValidationFailure(invalidValue: Int) {

@@ -121,7 +121,7 @@ struct PreviewRendererContext {
 	) throws(PreviewRenderer.Error) -> MTLDepthStencilState {
 		let depthStencilDescriptor = MTLDepthStencilDescriptor()
 
-		// For each pixel, if the depth is less than the current depth buffer, then draw, other wise don't draw.
+		// For each pixel, if the depth is less than the current depth buffer, then draw, otherwise don't draw.
 		depthStencilDescriptor.depthCompareFunction = .less
 
 		// Each time you do draw (it is less than current depth buffer), store the current depth in the depth buffer.

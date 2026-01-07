@@ -14,24 +14,30 @@ final class EstimatedFileSizeModel {
 
 	var getConversionSettings: (() -> GIFGenerator.Conversion)?
 	private var gifski: GIFGenerator?
+	private var estimationTask: Task<Void, Never>?
+	private var durationTask: Task<Void, Never>?
 
 	private func getEstimatedFileSizeNaive() async -> String {
 		await Int(getNaiveEstimate()).formatted(.byteCount(style: .file))
 	}
 
 	private func _estimateFileSize() {
+		// Cancel any previous tasks to prevent stale results from overwriting newer ones.
+		estimationTask?.cancel()
+		durationTask?.cancel()
+
 		self.gifski = nil
 		let gifski = GIFGenerator()
 		self.gifski = gifski
 		error = nil
 		estimatedFileSize = nil
 
-		Task {
+		durationTask = Task {
 			// TODO: Improve.
 			duration = (try? await getConversionSettings?().gifDuration) ?? .zero
 		}
 
-		Task {
+		estimationTask = Task {
 			estimatedFileSizeNaive = await getEstimatedFileSizeNaive()
 
 			guard let settings = getConversionSettings?() else {
@@ -41,8 +47,12 @@ final class EstimatedFileSizeModel {
 			do {
 				let data = try await gifski.run(settings, isEstimation: true) { _ in }
 
+				try Task.checkCancellation()
+
 				// We add 10% extra because it's better to estimate slightly too much than too little.
 				let fileSize = await (Double(data.count) * gifski.sizeMultiplierForEstimation) * 1.1
+
+				try Task.checkCancellation()
 
 				estimatedFileSize = Int(fileSize).formatted(.byteCount(style: .file))
 			} catch {

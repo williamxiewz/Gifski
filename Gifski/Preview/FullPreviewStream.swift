@@ -28,10 +28,6 @@ actor FullPreviewStream {
 		(self.eventStream, self.stateStreamContinuation) = AsyncStream<FullPreviewGenerationEvent>.makeStream(bufferingPolicy: .bufferingNewest(100))
 
 		stateStreamContinuation.onTermination = { [weak self] _ in
-			guard let self else {
-				return
-			}
-
 			Task { [weak self] in
 				await self?.generationTask?.cancel()
 			}
@@ -54,23 +50,17 @@ actor FullPreviewStream {
 	) async {
 		let requestID = newID()
 
-		requestID.p("starting new settings")
-
 		guard state.isNecessaryToCreateNewFullPreview(newSettings: newSettings, newRequestID: requestID) else {
 			// Not necessary to create a new full preview since there is no state change.
 			return
 		}
 
-		requestID.p("Generating")
-
 		if
 			let generationTask,
 			!generationTask.isCancelled
 		{
-			requestID.p("canceling")
 			generationTask.cancel()
 			_ = await generationTask.result
-			requestID.p("canceled old")
 		}
 
 		generationTask = .detached(priority: .medium) {
@@ -103,12 +93,10 @@ actor FullPreviewStream {
 				let textures = try await fullPreviewTask.value
 
 				try Task.checkCancellation()
-				requestID.p("success")
 
 				await self.updatePreview(newPreviewState: .ready(settings: newSettings, gifData: textures, requestID: requestID))
 			} catch {
 				if Task.isCancelled || error.isCancelled {
-					requestID.p("I was cancelled")
 					return
 				}
 

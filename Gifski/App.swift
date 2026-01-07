@@ -33,7 +33,7 @@ struct AppMain: App {
 					appState.onExportAsVideo?()
 				}
 				.keyboardShortcut("e")
-				.disabled(appState.onExportAsVideo == nil)
+				.disabled(!appState.isOnEditScreen)
 			}
 			CommandGroup(replacing: .textEditing) {
 				Toggle(

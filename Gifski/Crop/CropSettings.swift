@@ -45,7 +45,9 @@ extension CropSettings {
 		}
 
 		let outputDimensions = unnormalizedCropRect(sizeInPreferredTransformationSpace: .init(width: dimensions.width, height: dimensions.height))
-		return (outputDimensions.width.toIntAndClampingIfNeeded,
-				outputDimensions.height.toIntAndClampingIfNeeded)
+		return (
+			outputDimensions.width.toIntAndClampingIfNeeded,
+			outputDimensions.height.toIntAndClampingIfNeeded
+		)
 	}
 }

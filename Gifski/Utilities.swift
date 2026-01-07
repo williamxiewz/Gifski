@@ -13,8 +13,6 @@ typealias Default = _Default
 typealias AnyCancellable = Combine.AnyCancellable
 
 
-// TODO: Check if any of these can be removed when targeting macOS 15.
-extension NSItemProvider: @retroactive @unchecked Sendable {}
 
 
 @discardableResult
@@ -249,15 +247,6 @@ extension NSWindow {
 	}
 }
 
-
-extension Binding<Double> {
-	var doubleToInt: Binding<Int> {
-		map(
-			get: { Int($0) },
-			set: { Double($0) }
-		)
-	}
-}
 
 extension Binding<Int> {
 	var intToDouble: Binding<Double> {
@@ -686,7 +675,7 @@ extension AVAssetTrack {
 
 			// Workaround for https://github.com/sindresorhus/gifski-app/issues/76
 			guard preferredSize != .zero else {
-				// SInce this is just a fallback, we don't want to throw the error here.
+				// Since this is just a fallback, we don't want to throw the error here.
 				return try? await asset?.image(at: CMTime(seconds: 0, preferredTimescale: .video))?.size
 			}
 
@@ -949,55 +938,61 @@ enum AVFormat: String {
 	// https://en.wikipedia.org/wiki/Avid_DNxHD
 	case avidDNxHD
 
-	init?(fourCC: String) {
-		switch fourCC.trimmingCharacters(in: .whitespaces) {
-		case "hvc1":
-			self = .hevc
-		case "avc1":
-			self = .h264
-		case "av01":
-			self = .av1
-		case "vp09":
-			self = .vp9
-		case "aprh": // From https://avpres.net/Glossar/ProResRAW.html
-			self = .appleProResRAWHQ
-		case "aprn":
-			self = .appleProResRAW
-		case "ap4x":
-			self = .appleProRes4444XQ
-		case "ap4h":
-			self = .appleProRes4444
-		case "apch":
-			self = .appleProRes422HQ
-		case "apcn":
-			self = .appleProRes422
-		case "apcs":
-			self = .appleProRes422LT
-		case "apco":
-			self = .appleProRes422Proxy
-		case "rle":
-			self = .appleAnimation
-		case "Hap1":
-			self = .hap1
-		case "Hap5":
-			self = .hap5
-		case "HapY":
-			self = .hapY
-		case "HapM":
-			self = .hapM
-		case "HapA":
-			self = .hapA
-		case "Hap7":
-			self = .hap7
-		case "CFHD":
-			self = .cineFormHD
-		case "smc":
-			self = .quickTimeGraphics
-		case "AVdh":
-			self = .avidDNxHD
-		default:
-			return nil
+	/**
+	Single source of truth for fourCC ↔ AVFormat mapping.
+	*/
+	private static let fourCCMapping: [String: Self] = [
+		"hvc1": .hevc,
+		"avc1": .h264,
+		"av01": .av1,
+		"vp09": .vp9,
+		"aprh": .appleProResRAWHQ, // From https://avpres.net/Glossar/ProResRAW.html
+		"aprn": .appleProResRAW,
+		"ap4x": .appleProRes4444XQ,
+		"ap4h": .appleProRes4444,
+		"apch": .appleProRes422HQ,
+		"apcn": .appleProRes422,
+		"apcs": .appleProRes422LT,
+		"apco": .appleProRes422Proxy,
+		"rle ": .appleAnimation,
+		"Hap1": .hap1,
+		"Hap5": .hap5,
+		"HapY": .hapY,
+		"HapM": .hapM,
+		"HapA": .hapA,
+		"Hap7": .hap7,
+		"CFHD": .cineFormHD,
+		"smc": .quickTimeGraphics,
+		"AVdh": .avidDNxHD
+	]
+
+	/**
+	Reverse lookup: AVFormat → fourCC. Lazily computed once.
+	*/
+	private static let formatToFourCC: [Self: String] = {
+		fourCCMapping.reduce(into: [:]) { result, pair in
+			result[pair.value] = pair.key
 		}
+	}()
+
+	init?(fourCC: String) {
+		let trimmed = fourCC.trimmingCharacters(in: .whitespaces)
+
+		// Accept both trimmed and padded variants, since some sources strip the trailing space.
+		if let format = Self.fourCCMapping[trimmed] {
+			self = format
+			return
+		}
+
+		if
+			trimmed.count == 3,
+			let format = Self.fourCCMapping["\(trimmed) "]
+		{
+			self = format
+			return
+		}
+
+		return nil
 	}
 
 	init?(fourCC: FourCharCode) {
@@ -1005,65 +1000,22 @@ enum AVFormat: String {
 	}
 
 	var fourCC: String {
-		switch self {
-		case .hevc:
-			"hvc1"
-		case .h264:
-			"avc1"
-		case .av1:
-			"av01"
-		case .vp9:
-			"vp09"
-		case .appleProResRAWHQ:
-			"aprh"
-		case .appleProResRAW:
-			"aprn"
-		case .appleProRes4444XQ:
-			"ap4x"
-		case .appleProRes4444:
-			"ap4h"
-		case .appleProRes422HQ:
-			"apcn"
-		case .appleProRes422:
-			"apch"
-		case .appleProRes422LT:
-			"apcs"
-		case .appleProRes422Proxy:
-			"apco"
-		case .appleAnimation:
-			"rle "
-		case .hap1:
-			"Hap1"
-		case .hap5:
-			"Hap5"
-		case .hapY:
-			"HapY"
-		case .hapM:
-			"HapM"
-		case .hapA:
-			"HapA"
-		case .hap7:
-			"Hap7"
-		case .cineFormHD:
-			"CFHD"
-		case .quickTimeGraphics:
-			"smc"
-		case .avidDNxHD:
-			"AVdh"
-		}
+		Self.formatToFourCC[self] ?? rawValue
 	}
 
+	private static let appleProResFormats: Set<Self> = [
+		.appleProResRAWHQ,
+		.appleProResRAW,
+		.appleProRes4444XQ,
+		.appleProRes4444,
+		.appleProRes422HQ,
+		.appleProRes422,
+		.appleProRes422LT,
+		.appleProRes422Proxy
+	]
+
 	var isAppleProRes: Bool {
-		[
-			.appleProResRAWHQ,
-			.appleProResRAW,
-			.appleProRes4444XQ,
-			.appleProRes4444,
-			.appleProRes422HQ,
-			.appleProRes422,
-			.appleProRes422LT,
-			.appleProRes422Proxy
-		].contains(self)
+		Self.appleProResFormats.contains(self)
 	}
 
 	/**
@@ -1481,7 +1433,7 @@ extension NSPasteboard {
 	/**
 	Add a marker to the pasteboard indicating which app put the current data on the pasteboard.
 
-	This helps clipboard managers identity the source app.
+	This helps clipboard managers identify the source app.
 
 	- Important: All pasteboard operation should call this, unless you use `NSPasteboard#with`.
 
@@ -1902,14 +1854,6 @@ enum Device {
 		return identifier.trimmingCharacters(in: .controlCharacters)
 	}()
 
-	static let isRunningNativelyOnMacWithAppleSilicon: Bool = {
-		#if os(macOS) && arch(arm64)
-		true
-		#else
-		false
-		#endif
-	}()
-
 	static let supportedVideoTypes: [UTType] = [
 		.mpeg4Movie,
 		.quickTimeMovie
@@ -1929,35 +1873,33 @@ extension CharacterSet {
 	static let urlUnreservedRFC3986 = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
 }
 
-/**
-This should really not be necessary, but it's at least needed for my `formspree.io` form...
+extension String {
+	/**
+	Escapes the string for use in URL query components.
 
-Otherwise is results in "Internal Server Error" after submitting the form.
+	This should really not be necessary, but it's at least needed for my `formspree.io` form...
 
-Relevant: https://www.djackson.org/why-we-do-not-use-urlcomponents/
-*/
-private func escapeQueryComponent(_ query: String) -> String {
-	query.addingPercentEncoding(withAllowedCharacters: .urlUnreservedRFC3986)!
+	Otherwise is results in "Internal Server Error" after submitting the form.
+
+	Relevant: https://www.djackson.org/why-we-do-not-use-urlcomponents/
+	*/
+	var escapedQueryComponent: String {
+		addingPercentEncoding(withAllowedCharacters: .urlUnreservedRFC3986)!
+	}
 }
 
 
 extension Dictionary where Key == String {
 	/**
-	This correctly escapes items. See `escapeQueryComponent`.
+	This correctly escapes items. See `String.escapedQueryComponent`.
 	*/
 	var toQueryItems: [URLQueryItem] {
 		map {
 			URLQueryItem(
-				name: escapeQueryComponent($0),
-				value: escapeQueryComponent("\($1)")
+				name: $0.escapedQueryComponent,
+				value: "\($1)".escapedQueryComponent
 			)
 		}
-	}
-
-	var toQueryString: String {
-		var components = URLComponents()
-		components.queryItems = toQueryItems
-		return components.query!
 	}
 }
 
@@ -1971,7 +1913,7 @@ extension Dictionary {
 
 extension URLComponents {
 	/**
-	This correctly escapes items. See `escapeQueryComponent`.
+	This correctly escapes items. See `String.escapedQueryComponent`.
 	*/
 	init?(string: String, query: QueryDictionary) {
 		self.init(string: string)
@@ -1979,7 +1921,7 @@ extension URLComponents {
 	}
 
 	/**
-	This correctly escapes items. See `escapeQueryComponent`.
+	This correctly escapes items. See `String.escapedQueryComponent`.
 	*/
 	var queryDictionary: QueryDictionary {
 		get {
@@ -2079,58 +2021,6 @@ extension URL {
 	var isWritable: Bool { boolResourceValue(forKey: .isWritableKey) }
 
 	var isVolumeReadonly: Bool { boolResourceValue(forKey: .volumeIsReadOnlyKey) }
-}
-
-
-extension URL {
-	/**
-	Returns the user's real home directory when called in a sandboxed app.
-	*/
-	static let realHomeDirectory = Self(
-		fileURLWithFileSystemRepresentation: getpwuid(getuid())!.pointee.pw_dir!,
-		isDirectory: true,
-		relativeTo: nil
-	)
-}
-
-
-extension URL {
-	func relationship(to url: Self) -> FileManager.URLRelationship {
-		var relationship = FileManager.URLRelationship.other
-		_ = try? FileManager.default.getRelationship(&relationship, ofDirectoryAt: self, toItemAt: url)
-		return relationship
-	}
-}
-
-
-extension URL {
-	/**
-	Check whether the URL is inside the home directory.
-	*/
-	var isInsideHomeDirectory: Bool {
-		Self.realHomeDirectory.relationship(to: self) == .contains
-	}
-
-	/**
-	Check whether the URL path is on the main volume; The volume with the root file system.
-
-	- Note: The URL does not need to exist.
-	*/
-	var isOnMainVolume: Bool {
-		// We intentionally do a string check instead of `try? resourceValues(forKeys: [.volumeIsRootFileSystemKey]).volumeIsRootFileSystem` as it's faster and it works on URLs that doesn't exist.
-		!path.hasPrefix("/Volumes/")
-	}
-}
-
-
-extension URL {
-	/**
-	Whether the directory URL is suitable for use as a default directory for a save panel.
-	*/
-	var canBeDefaultSavePanelDirectory: Bool {
-		// We allow if it's inside the home directory on the main volume or on a different writable volume.
-		isInsideHomeDirectory || (!isOnMainVolume && !isVolumeReadonly)
-	}
 }
 
 
@@ -2592,17 +2482,6 @@ extension Collection {
 }
 
 
-protocol Copyable {
-	init(instance: Self)
-}
-
-extension Copyable {
-	func copy() -> Self {
-		Self(instance: self)
-	}
-}
-
-
 // swiftlint:disable all
 extension FloatingPoint {
 	@inlinable
@@ -2618,14 +2497,6 @@ extension FloatingPoint {
 
 		let scale = max(abs(self), abs(other), .leastNormalMagnitude)
 		return abs(self - other) < scale * tolerance
-	}
-
-	@inlinable
-	public func isAlmostZero(
-		absoluteTolerance tolerance: Self = ulpOfOne.squareRoot()
-	) -> Bool {
-		assert(tolerance > 0)
-		return abs(self) < tolerance
 	}
 
 	@usableFromInline
@@ -2984,7 +2855,6 @@ extension ClosedRange<Double> {
 
 extension BinaryInteger {
 	var isEven: Bool { isMultiple(of: 2) }
-	var isOdd: Bool { !isEven }
 }
 
 
@@ -3131,6 +3001,11 @@ extension AVPlayer {
 
 final class LoopingPlayer: AVPlayer {
 	private var cancellable: AnyCancellable?
+	private var timeObserverToken: Any?
+
+	deinit {
+		removeTimeObserver()
+	}
 
 	/**
 	Loop the playback.
@@ -3157,44 +3032,78 @@ final class LoopingPlayer: AVPlayer {
 	override func replaceCurrentItem(with item: AVPlayerItem?) {
 		super.replaceCurrentItem(with: item)
 		cancellable = nil
+		removeTimeObserver()
 		updateObserver()
+	}
+
+	private func removeTimeObserver() {
+		if let token = timeObserverToken {
+			removeTimeObserver(token)
+			timeObserverToken = nil
+		}
 	}
 
 	private func updateObserver() {
 		guard bouncePlayback || loopPlayback else {
 			cancellable = nil
+			removeTimeObserver()
 			actionAtItemEnd = .pause
 			return
 		}
 
 		actionAtItemEnd = .none
 
-		guard cancellable == nil else {
-			// Already observing. No need to update.
-			return
+		// Set up the notification observer if not already set up.
+		if cancellable == nil {
+			cancellable = NotificationCenter.default
+				.publisher(for: .AVPlayerItemDidPlayToEndTime, object: currentItem)
+				.sink { [weak self] _ in
+					guard let self else {
+						return
+					}
+
+					pause()
+
+					if
+						bouncePlayback,
+						currentItem?.canPlayReverse == true,
+						currentTime().seconds > currentItem?.playbackRange?.lowerBound ?? 0
+					{
+						seekToEnd()
+						playImmediately(atRate: -defaultRate)
+					} else if loopPlayback {
+						seekToStart()
+						playImmediately(atRate: defaultRate)
+					}
+				}
 		}
 
-		cancellable = NotificationCenter.default
-			.publisher(for: .AVPlayerItemDidPlayToEndTime, object: currentItem)
-			.sink { [weak self] _ in
-				guard let self else {
+		// AVPlayerItemDidPlayToEndTime doesn't fire when playing in reverse and reaching the start.
+		// Use a periodic time observer to detect when reverse playback reaches the start.
+		if bouncePlayback, timeObserverToken == nil {
+			timeObserverToken = addPeriodicTimeObserver(
+				forInterval: CMTime(seconds: 0.05, preferredTimescale: .video),
+				queue: .main
+			) { [weak self] time in
+				guard
+					let self,
+					bouncePlayback,
+					rate < 0 // Playing in reverse
+				else {
 					return
 				}
 
-				pause()
+				let startTime = currentItem?.playbackRange?.lowerBound ?? 0
 
-				if
-					bouncePlayback,
-					currentItem?.canPlayReverse == true,
-					currentTime().seconds > currentItem?.playbackRange?.lowerBound ?? 0
-				{
-					seekToEnd()
-					playImmediately(atRate: -defaultRate)
-				} else if loopPlayback {
+				if time.seconds <= startTime {
+					pause()
 					seekToStart()
 					playImmediately(atRate: defaultRate)
 				}
 			}
+		} else if !bouncePlayback {
+			removeTimeObserver()
+		}
 	}
 }
 
@@ -3377,31 +3286,6 @@ extension Debouncer {
 extension Sequence where Element: Sequence {
 	func flatten() -> [Element.Element] {
 		flatMap(\.self)
-	}
-}
-
-
-extension String {
-	var trimmedTrailing: Self {
-		replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression)
-	}
-
-	/**
-	```
-	"Unicorn".truncating(to: 4)
-	//=> "Uni…"
-	```
-	*/
-	func truncating(to number: Int, truncationIndicator: Self = "…") -> Self {
-		if number <= 0 {
-			return ""
-		}
-
-		if count > number {
-			return String(prefix(number - truncationIndicator.count)).trimmedTrailing + truncationIndicator
-		}
-
-		return self
 	}
 }
 
@@ -3814,9 +3698,9 @@ extension OperatingSystem {
 	static let isMacOrVision = isMacOS || isVisionOS
 	static let isIOSOrVision = isIOS || isVisionOS
 
-	static let isMacOS26OrLater: Bool = {
+	static let isMacOS27OrLater: Bool = {
 		#if os(macOS)
-		if #available(macOS 26, *) {
+		if #available(macOS 27, *) {
 			return true
 		}
 
@@ -3826,9 +3710,9 @@ extension OperatingSystem {
 		#endif
 	}()
 
-	static let isMacOS27OrLater: Bool = {
+	static let isMacOS28OrLater: Bool = {
 		#if os(macOS)
-		if #available(macOS 27, *) {
+		if #available(macOS 28, *) {
 			return true
 		}
 
@@ -5064,7 +4948,7 @@ struct CopyButton: View {
 			isShowingSuccess = true
 
 			Task {
-				try? await Task.sleep(for: .seconds(1))
+				try await Task.sleep(for: .seconds(1))
 				isShowingSuccess = false
 			}
 
@@ -6620,16 +6504,5 @@ extension ClosedRange<Double> {
 
 	public static func * (lhs: ClosedRange<Double>, rhs: Double) -> ClosedRange<Double> {
 		(lhs.lowerBound * rhs) ... (lhs.upperBound * rhs)
-	}
-}
-
-
-extension ToolbarContent {
-	nonisolated func ss_sharedBackgroundVisibility_hidden() -> some ToolbarContent {
-		if #available(macOS 26, iOS 26, tvOS 26, watchOS 26, visionOS 26, *) {
-			return sharedBackgroundVisibility(.hidden)
-		}
-
-		return self
 	}
 }

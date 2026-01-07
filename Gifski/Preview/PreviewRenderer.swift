@@ -114,7 +114,7 @@ actor PreviewRenderer {
 					)
 				}
 
-				// Tell the encoder to draw. We want to draw 2 quads (one for the preview, one for the checkerboard pattern). The next  code to look at will be the vertex shader in `previewVertexShader`.
+				// Tell the encoder to draw. We want to draw 2 quads (one for the preview, one for the checkerboard pattern). The next code to look at will be the vertex shader in `previewVertexShader`.
 				renderEncoder.drawPrimitives(
 					type: .triangle,
 					vertexStart: 0,

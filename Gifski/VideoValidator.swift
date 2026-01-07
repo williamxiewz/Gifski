@@ -52,10 +52,12 @@ enum VideoValidator {
 			)
 		}
 
-		// TODO: Parallelize these checks.
+		async let hasAudioCheck = asset.hasAudio
+		async let hasVideoCheck = asset.hasVideo
+
 		if
-			try await asset.hasAudio,
-			try await !asset.hasVideo
+			try await hasAudioCheck,
+			try await !hasVideoCheck
 		{
 			throw NSError.appError(
 				"Audio files are not supported.",

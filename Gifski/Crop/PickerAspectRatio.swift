@@ -69,11 +69,10 @@ extension PickerAspectRatio {
 		return "Custom - \(customSizeDescription)"
 	}
 
-
 	/**
-	Calculates the closest current aspect ratio of the crop rec with width and height within the given range.
+	Calculates the closest current aspect ratio of the crop rect with width and height within the given range.
 
-	First, it tries to calculate the greatest common divisor (GCD) of the width and height to simplify the ratio. If the the width and height of the ratio are both less than within the range, it uses that as the aspect ratio. Otherwise, it approximates the aspect ratio by finding the closest fraction with a denominator less than the upper bound of the range that matches the current aspect ratio as closely as possible.
+	First, it tries to calculate the greatest common divisor (GCD) of the width and height to simplify the ratio. If the width and height of the ratio are both within the range, it uses that as the aspect ratio. Otherwise, it approximates the aspect ratio by finding the closest fraction with a denominator less than the upper bound of the range that matches the current aspect ratio as closely as possible.
 	*/
 	static func closestAspectRatio(
 		for size: CGSize,

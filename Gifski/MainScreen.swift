@@ -13,6 +13,8 @@ struct MainScreen: View {
 					switch $0 {
 					case .edit(let url, let asset, let metadata): // TODO: Make a `Job` struct for this?
 						EditScreen(url: url, asset: asset, metadata: metadata)
+							// Ensures @State properties are reset when loading a new video.
+							.id(url)
 					case .conversion(let conversion):
 						ConversionScreen(conversion: conversion)
 					case .completed(let data, let url):
@@ -37,7 +39,7 @@ struct MainScreen: View {
 //		.backgroundWithMaterial(.underWindowBackground, blendingMode: .behindWindow)
 		.alert(error: $appState.error)
 		.border(isDropTargeted ? Color.accentColor : .clear, width: 5, cornerRadius: 10)
-		// TODO: use `.dropDestination` here when targeting macOS 15. It's stil buggy in macOS 14 (from experience with Aiko)
+		// Using `onDrop` with delegate instead of `.dropDestination` as it provides better UX with pre-drop validation feedback.
 		.onDrop(
 			of: appState.isConverting ? [] : [.fileURL],
 			delegate: AnyDropDelegate(
