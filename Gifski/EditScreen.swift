@@ -42,6 +42,7 @@ private struct _EditScreen: View {
 	@State private var url: URL
 	@State private var asset: AVAsset
 	@State private var modifiedAsset: AVAsset
+	@State private var modifiedAssetTimeRange: CMTimeRange?
 	@State private var metadata: AVAsset.VideoMetadata
 	@State private var estimatedFileSizeModel = EstimatedFileSizeModel()
 	@State private var timeRange: ClosedRange<Double>?
@@ -54,8 +55,12 @@ private struct _EditScreen: View {
 	@State private var fullPreviewDebouncer = Debouncer(delay: .milliseconds(200))
 
 	@Binding private var outputCropRect: CropRect
+	@State private var exportModifiedVideoState = ExportModifiedVideoState.idle
+	@State private var isExportModifiedVideoAudioWarningPresented = false
 	private var overlay: NSView
 	private let fullPreviewStream: FullPreviewStream
+	@State private var lastSpeed: Double?
+
 
 	init(
 		url: URL,
@@ -79,6 +84,11 @@ private struct _EditScreen: View {
 			trimmingAVPlayer
 			controls
 			bottomBar
+			ExportModifiedVideoView(
+				state: $exportModifiedVideoState,
+				sourceURL: url,
+				isAudioWarningPresented: $isExportModifiedVideoAudioWarningPresented
+			)
 		}
 		.background(.ultraThickMaterial)
 		.navigationTitle(url.lastPathComponent)
@@ -122,9 +132,11 @@ private struct _EditScreen: View {
 			}
 			.ss_sharedBackgroundVisibility_hidden()
 		}
-		.onReceive(Defaults.publisher(.outputSpeed, options: []).removeDuplicates().debounce(for: .seconds(0.4), scheduler: DispatchQueue.main)) { _ in
-			Task {
-				await setSpeed()
+		.onReceive(Defaults.publisher(.outputSpeed, options: [])) { _ in
+			Debouncer.debounce(delay: .seconds(0.4)) {
+				Task {
+					await setSpeed()
+				}
 			}
 		}
 		// We cannot use `Defaults.publisher(.outputSpeed, options: [])` without the `options` as it causes some weird glitches.
@@ -168,6 +180,19 @@ private struct _EditScreen: View {
 		.opacity(shouldShow ? 1 : 0)
 		.onAppear {
 			setUp()
+			appState.onExportAsVideo = onExportAsVideo
+		}
+		.onDisappear {
+			appState.onExportAsVideo = nil
+
+			switch exportModifiedVideoState {
+			case .idle:
+				break
+			case .exporting(let task, _):
+				task.cancel()
+			case .finished(let url):
+				try? FileManager.default.removeItem(at: url)
+			}
 		}
 		.task {
 			try? await Task.sleep(for: .seconds(0.3))
@@ -181,6 +206,44 @@ private struct _EditScreen: View {
 				fullPreviewState = event
 			}
 		}
+	}
+
+	private func onExportAsVideo() {
+		switch exportModifiedVideoState {
+		case .idle:
+			break
+		case .exporting, .finished:
+			// If another alert (like bounce warning) occurs when you activate this callback, the `fileExporter` modifier won't show and the state will be stuck on `.finished`. By reassigning the state this will force a swiftUI draw and bring up the file exporter.
+			exportModifiedVideoState = exportModifiedVideoState
+			return
+		}
+
+		if metadata.hasAudio {
+			SSApp.runOnce(identifier: "audioTrackExportWarning") {
+				isExportModifiedVideoAudioWarningPresented = true
+			}
+		}
+
+		exportModifiedVideoState = .exporting(
+			Task {
+				do {
+					let outputURL = try await exportModifiedVideo(conversion: conversionSettings)
+					try await MainActor.run {
+						try Task.checkCancellation()
+						exportModifiedVideoState = .finished(outputURL)
+					}
+				} catch {
+					if Task.isCancelled || error.isCancelled {
+						return
+					}
+					await MainActor.run {
+						exportModifiedVideoState = .idle
+						appState.error = error
+					}
+				}
+			},
+			videoIsOverTwentySeconds: conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange, withBounce: false) > .seconds(20)
+		)
 	}
 
 	private func updatePreviewOnSettingsChange() {
@@ -207,10 +270,15 @@ private struct _EditScreen: View {
 
 	private func setSpeed() async {
 		do {
+			if Defaults[.outputSpeed] == lastSpeed {
+				return
+			}
+			lastSpeed = Defaults[.outputSpeed]
 			// We could have set the `rate` of the player instead of modifying the asset, but it's just easier to modify the asset as then it matches what we want to generate. Otherwise, we would have to translate trimming ranges to the correct speed, etc.
 
 			let changedSpeedAsset = try await asset.firstVideoTrack?.extractToNewAssetAndChangeSpeed(to: Defaults[.outputSpeed]) ?? modifiedAsset
 			modifiedAsset = try await PreviewableComposition(extractPreviewableCompositionFrom: changedSpeedAsset)
+			modifiedAssetTimeRange = try await changedSpeedAsset.firstVideoTrack?.load(.timeRange)
 
 			estimatedFileSizeModel.updateEstimate()
 			updatePreviewOnSettingsChange()
@@ -325,7 +393,8 @@ private struct _EditScreen: View {
 				return .forever
 			}(),
 			bounce: bounceGIF,
-			crop: outputCropRect
+			crop: outputCropRect,
+			trackPreferredTransform: metadata.trackPreferredTransform
 		)
 	}
 

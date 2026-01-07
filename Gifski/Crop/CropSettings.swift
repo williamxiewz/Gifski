@@ -3,6 +3,7 @@ import AVKit
 
 protocol CropSettings {
 	var dimensions: (width: Int, height: Int)? { get }
+	var trackPreferredTransform: CGAffineTransform? { get }
 	var crop: CropRect? { get }
 }
 
@@ -15,15 +16,32 @@ extension CropSettings {
 	If the rect parameter defines an area that is not in the image, it returns nil: https://developer.apple.com/documentation/coregraphics/cgimage/1454683-cropping
 	*/
 	func croppedImage(image: CGImage) -> CGImage? {
-		guard let crop else {
+		guard crop != nil else {
 			return image
 		}
+		let transformedCrop = unnormalizedCropRect(sizeInPreferredTransformationSpace: .init(width: image.width, height: image.height))
+		return image.cropping(to: transformedCrop)
+	}
 
-		return image.cropping(to: crop.unnormalize(forDimensions: (image.width, image.height)))
+	func unnormalizedCropRect(sizeInPreferredTransformationSpace preferredSize: CGSize) -> CGRect {
+		guard let trackPreferredTransform else {
+			guard let cropRect = crop else {
+				return .init(origin: .zero, size: preferredSize)
+			}
+			return cropRect.unnormalize(forDimensions: preferredSize)
+		}
+
+		let originalSize = CGRect(origin: .zero, size: preferredSize)
+			.applying(trackPreferredTransform.inverted()).size
+		guard let cropRect = crop else {
+			return .init(origin: .zero, size: originalSize).applying(trackPreferredTransform)
+		}
+		let originalCropSize = cropRect.unnormalize(forDimensions: originalSize)
+		return originalCropSize.applying(trackPreferredTransform)
 	}
 
 	var croppedOutputDimensions: (width: Int, height: Int)? {
-		guard let crop else {
+		guard crop != nil else {
 			return dimensions
 		}
 
@@ -31,11 +49,8 @@ extension CropSettings {
 			return nil
 		}
 
-		let cropInPixels = crop.unnormalize(forDimensions: dimensions)
-
-		return (
-			cropInPixels.width.toIntAndClampingIfNeeded,
-			cropInPixels.height.toIntAndClampingIfNeeded
-		)
+		let outputDimensions = unnormalizedCropRect(sizeInPreferredTransformationSpace: .init(width: dimensions.width, height: dimensions.height))
+		return (outputDimensions.width.toIntAndClampingIfNeeded,
+				outputDimensions.height.toIntAndClampingIfNeeded)
 	}
 }

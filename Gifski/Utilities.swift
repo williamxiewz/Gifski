@@ -1288,6 +1288,11 @@ extension AVAsset {
 			try await fileSize.formatted(.byteCount(style: .file))
 		}
 	}
+	var trackPreferredTransform: CGAffineTransform? {
+		get async throws {
+			try await firstVideoTrack?.load(.preferredTransform)
+		}
+	}
 }
 
 
@@ -1364,6 +1369,8 @@ extension AVAsset {
 		let duration: Duration
 		let frameRate: Double
 		let fileSize: Int
+		var hasAudio: Bool
+		let trackPreferredTransform: CGAffineTransform?
 	}
 
 	var videoMetadata: VideoMetadata? {
@@ -1372,6 +1379,8 @@ extension AVAsset {
 			async let frameRateResult = frameRate
 			async let fileSizeResult = fileSize
 			async let durationResult = load(.duration)
+			async let trackPreferredTransformResult = trackPreferredTransform
+			async let hasAudioResult = firstAudioTrack != nil
 
 			guard
 				let dimensions = try await dimensionsResult,
@@ -1382,12 +1391,16 @@ extension AVAsset {
 
 			let fileSize = try await fileSizeResult
 			let duration = try await durationResult
+			let hasAudio = try await hasAudioResult
+			let trackPreferredTransform = try await trackPreferredTransformResult
 
 			return .init(
 				dimensions: dimensions,
 				duration: .seconds(duration.seconds),
 				frameRate: frameRate,
-				fileSize: fileSize
+				fileSize: fileSize,
+				hasAudio: hasAudio,
+				trackPreferredTransform: trackPreferredTransform
 			)
 		}
 	}
@@ -2126,6 +2139,16 @@ extension CGSize {
 		.init(width: lhs.width * rhs, height: lhs.height * rhs)
 	}
 
+	static func / (lhs: Self, rhs: Self) -> Self {
+		.init(width: lhs.width / rhs.width, height: lhs.height / rhs.height)
+	}
+
+	static func > (lhs: Self, rhs: Double) -> Bool {
+		lhs.width > rhs && lhs.height > rhs
+	}
+
+	static let one = Self(widthHeight: 1)
+
 	init(widthHeight: Double) {
 		self.init(width: widthHeight, height: widthHeight)
 	}
@@ -2790,6 +2813,12 @@ extension CMTimeRange {
 		}
 
 		return start.seconds...end.seconds
+	}
+}
+
+extension ClosedRange<Double> {
+	var cmTimeRange: CMTimeRange {
+		.init(start: .init(seconds: lowerBound, preferredTimescale: .video), end: .init(seconds: upperBound, preferredTimescale: .video))
 	}
 }
 
@@ -6169,6 +6198,14 @@ extension CGPoint {
 			y: y.clamped(from: rect.minY, to: rect.maxY)
 		)
 	}
+
+	static func / (lhs: CGPoint, rhs: CGSize) -> CGPoint {
+		.init(x: lhs.x / rhs.width, y: lhs.y / rhs.height)
+	}
+
+	static prefix func - (lhs: CGPoint) -> CGPoint {
+		.init(x: -lhs.x, y: -lhs.y)
+	}
 }
 
 extension CGSize {
@@ -6187,8 +6224,8 @@ extension CGSize {
 
 /**
 We need to keep a strong reference to the `CVMetalTexture` until the GPU command completes. This struct ensures that the `CVMetalTexture` is not garbage collected as long as the `MTLTexture` is around. [See](https://developer.apple.com/documentation/corevideo/cvmetaltexturecachecreatetexturefromimage(_:_:_:_:_:_:_:_:_:))
- */
-struct CVMetalTextureRefeference {
+*/
+struct CVMetalTextureReference {
 	private let coreVideoTextureReference: CVMetalTexture
 
 	let texture: MTLTexture
@@ -6264,7 +6301,7 @@ extension CVMetalTextureCache {
 		from image: CVPixelBuffer,
 		pixelFormat: MTLPixelFormat,
 		textureAttributes: [String: Any]? = nil // swiftlint:disable:this discouraged_optional_collection
-	) throws(Error) -> CVMetalTextureRefeference {
+	) throws(Error) -> CVMetalTextureReference {
 		var coreVideoTextureReference: CVMetalTexture?
 
 		let result = CVMetalTextureCacheCreateTextureFromImage(
@@ -6558,6 +6595,30 @@ extension CompositePreviewFragmentUniforms: Equatable {
 		lhs.firstColor == rhs.firstColor &&
 		lhs.secondColor == rhs.secondColor &&
 		lhs.gridSize == rhs.gridSize
+	}
+}
+
+extension CGAffineTransform {
+	init(scaledBy size: CGSize) {
+		self = Self(scaleX: size.width, y: size.height)
+	}
+
+	func translated(by point: CGPoint) -> Self {
+		translatedBy(x: point.x, y: point.y)
+	}
+}
+
+extension ClosedRange<Double> {
+	public static func - (lhs: ClosedRange<Double>, rhs: Double) -> ClosedRange<Double> {
+		(lhs.lowerBound - rhs) ... (lhs.upperBound - rhs)
+	}
+
+	public static func + (lhs: ClosedRange<Double>, rhs: Double) -> ClosedRange<Double> {
+		(lhs.lowerBound + rhs) ... (lhs.upperBound + rhs)
+	}
+
+	public static func * (lhs: ClosedRange<Double>, rhs: Double) -> ClosedRange<Double> {
+		(lhs.lowerBound * rhs) ... (lhs.upperBound * rhs)
 	}
 }
 

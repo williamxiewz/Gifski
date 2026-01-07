@@ -359,6 +359,7 @@ extension GIFGenerator {
 		var loop: Gifski.Loop
 		var bounce: Bool
 		var crop: CropRect?
+		var trackPreferredTransform: CGAffineTransform?
 	}
 }
 
@@ -366,19 +367,128 @@ extension GIFGenerator.Conversion {
 	var gifDuration: Duration {
 		get async throws {
 			// TODO: Make this lazy so it's only used for fallback.
-			let fallbackRange = try await asset.firstVideoTrack?.load(.timeRange).range
-
-			guard let duration = (timeRange ?? fallbackRange)?.length else {
-				return .zero
-			}
-
-			// TODO: Do this when Swift supports async in `??`.
-			//				guard let duration = (timeRange ?? asset.firstVideoTrack?.timeRange.range)?.length else {
-			//					return .zero
-			//				}
-
-			return .seconds(bounce ? (duration * 2) : duration)
+			let fallbackRange = try await asset.firstVideoTrack?.load(.timeRange)
+			return gifDuration(assetTimeRange: fallbackRange)
 		}
+	}
+
+	func gifDuration(assetTimeRange fallbackRange: CMTimeRange?, withBounce: Bool = true) -> Duration {
+		guard let duration = (timeRange ?? fallbackRange?.range)?.length else {
+			return .zero
+		}
+
+		// TODO: Do this when Swift supports async in `??`.
+		//				guard let duration = (timeRange ?? asset.firstVideoTrack?.timeRange.range)?.length else {
+		//					return .zero
+		//				}
+		return .seconds(withBounce && bounce ? (duration * 2) : duration)
+	}
+
+	var videoWithoutBounceDuration: Duration {
+		get async throws {
+			.seconds(try await gifDuration.toTimeInterval / (bounce ? 2 : 1))
+		}
+	}
+
+	/**
+	- Returns: The current scale of the `dimensions` compared to the dimensions of the video track.
+	*/
+	var scale: CGSize {
+		get async throws {
+			guard let trackDimensions = try await trackDimensions else {
+				return .one
+			}
+			guard trackDimensions > 0 else {
+				throw Error.invalidDimensions
+			}
+			guard let dimensions = dimensionsAsCGSize else {
+				return .one
+			}
+			let scale = dimensions / trackDimensions
+			guard scale > 0 else {
+				throw Error.invalidScale
+			}
+			return scale
+		}
+	}
+
+	/**
+	- Returns: Dimensions of the first video track after applying preferredTransform
+	*/
+	var trackDimensions: CGSize? {
+		get async throws {
+			try await asset.firstVideoTrack?.dimensions
+		}
+	}
+
+	var dimensionsAsCGSize: CGSize? {
+		dimensions.map {
+			.init(width: Double($0.0), height: Double($0.1))
+		}
+	}
+
+	/**
+	The size of the output render without taking crop into account.
+	*/
+	var renderSize: CGSize {
+		get async throws {
+			if let dimensionsAsCGSize {
+				return dimensionsAsCGSize
+			}
+			guard let trackSize = try await trackDimensions else {
+				throw Error.invalidDimensions
+			}
+			return trackSize
+		}
+	}
+
+	/**
+	- Returns: Crop rect in pixels, if there is no crop rect then it returns the full render size.
+	*/
+	var cropRectInPixels: CGRect {
+		get async throws {
+			(crop ?? .initialCropRect).unnormalize(forDimensions: try await renderSize)
+		}
+	}
+
+	var cropRectAppliedToNaturalSize: CGRect {
+		get async throws {
+			let size = try await asset.firstVideoTrack?.load(.naturalSize) ?? .one
+			return (crop ?? .initialCropRect).unnormalize(forDimensions: size)
+		}
+	}
+
+	var exportModifiedRenderRect: CGRect {
+		get async throws {
+			unnormalizedCropRect(sizeInPreferredTransformationSpace: try await renderSize)
+		}
+	}
+
+	/**
+	- Returns: The time range used to export the modified video (i.e. not the `.gif` export).
+	*/
+	var exportModifiedVideoTimeRange: CMTimeRange {
+		get async throws {
+			if let timeRange {
+				return timeRange.cmTimeRange
+			}
+			return (0...(try await videoWithoutBounceDuration.toTimeInterval)).cmTimeRange
+		}
+	}
+
+	var firstVideoTrack: AVAssetTrack {
+		get async throws {
+			guard let videoTrack = try await asset.firstVideoTrack else {
+				throw Error.noVideoTrack
+			}
+			return videoTrack
+		}
+	}
+
+	enum Error: Swift.Error {
+		case invalidDimensions
+		case invalidScale
+		case noVideoTrack
 	}
 }
 

@@ -28,6 +28,13 @@ struct AppMain: App {
 				.keyboardShortcut("o")
 				.disabled(appState.isConverting)
 			}
+			CommandGroup(replacing: .importExport) {
+				Button("Export as Video…", systemImage: "square.and.arrow.up") {
+					appState.onExportAsVideo?()
+				}
+				.keyboardShortcut("e")
+				.disabled(appState.onExportAsVideo == nil)
+			}
 			CommandGroup(replacing: .textEditing) {
 				Toggle(
 					"Preview",
