@@ -74,7 +74,7 @@ struct ExportModifiedVideoView: View {
 			get: { state.isFinished && !isAudioWarningPresented },
 			set: {
 				guard
-					$0,
+					!$0,
 					case let .finished(url) = state else {
 					return
 				}
@@ -220,12 +220,16 @@ private func createVideoComposition(
 	instruction.timeRange = CMTimeRange(start: .zero, duration: .init(seconds: try await conversion.videoWithoutBounceDuration.toTimeInterval + 1.0, preferredTimescale: .video))
 
 	let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+
+	// Layer instructions operate in natural space (unrotated). The crop rect from UI is in
+	// preferred space, so `cropRectAppliedToNaturalSize` transforms it back to natural space.
 	let cropRectAppliedToNaturalSize = try await conversion.cropRectAppliedToNaturalSize
 	let preferredTransform = conversion.trackPreferredTransform ?? .identity
 	let scaleTransform = CGAffineTransform(scaledBy: try await conversion.scale)
 	let scaledCropRect = cropRectAppliedToNaturalSize.applying(scaleTransform)
 	let cropRectAfterPreferred = scaledCropRect.applying(preferredTransform)
-	// now let's place the crop rect in the top left corner
+
+	// Place the crop rect in the top left corner.
 	let translateTransform = CGAffineTransform(translationX: -cropRectAfterPreferred.minX, y: -cropRectAfterPreferred.minY)
 	layerInstruction.setCropRectangle(cropRectAppliedToNaturalSize, at: .zero)
 	layerInstruction.setTransform(scaleTransform.concatenating(preferredTransform).concatenating(translateTransform), at: .zero)

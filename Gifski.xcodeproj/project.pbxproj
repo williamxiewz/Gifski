@@ -102,6 +102,7 @@
 		E3908B7326754568000723A7 /* EstimatedFileSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EstimatedFileSize.swift; sourceTree = "<group>"; };
 		E3961F7F2AC9F2A700708EB7 /* Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Intents.swift; sourceTree = "<group>"; };
 		E3A6BD102245345C00F62256 /* Constants.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; lineEnding = 0; path = Constants.swift; sourceTree = "<group>"; usesTabs = 1; };
+		E3ACE84E2F0EC74C004F95CC /* maintaining.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = maintaining.md; sourceTree = "<group>"; };
 		E3AE62831E5CD2F300035A2F /* Gifski.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Gifski.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E3AE62861E5CD2F300035A2F /* App.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; lineEnding = 0; path = App.swift; sourceTree = "<group>"; usesTabs = 1; };
 		E3AE62881E5CD2F300035A2F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -200,6 +201,7 @@
 		E3AE627A1E5CD2F300035A2F = {
 			isa = PBXGroup;
 			children = (
+				E3ACE84E2F0EC74C004F95CC /* maintaining.md */,
 				E3805F542466E68900489E6C /* Config.xcconfig */,
 				E3AE62851E5CD2F300035A2F /* Gifski */,
 				0E79251C2329BDBE00058B94 /* Share Extension */,

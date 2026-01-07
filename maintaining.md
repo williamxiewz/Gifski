@@ -26,3 +26,20 @@ Sometimes the service doesn't work and it's really hard to understand why withou
 ```bash
 /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder -NSDebugServices com.sindresorhus.Gifski
 ```
+
+### Video rotation handling
+
+Videos can have a `preferredTransform` that rotates the raw frames (e.g., portrait videos filmed on phones). There are two coordinate spaces:
+
+1. **Natural space**: Raw frame dimensions (`naturalSize`), unrotated (e.g., 1920x1080)
+2. **Preferred space**: How the user sees the video after rotation (e.g., 1080x1920 for portrait)
+
+In this app:
+- UI dimensions (`metadata.dimensions`) are in **preferred space** (already rotated)
+- Crop rect from UI is defined in **preferred space**
+- `AVAssetImageGenerator` with `appliesPreferredTrackTransform = true` returns images in **preferred space**
+- Preview manually applies transform, so images are also in **preferred space**
+- `AVComposition` layer instructions operate in **natural space** (must transform crop back)
+
+When cropping images: Apply crop directly (images are pre-rotated).
+When exporting video: Transform crop from preferred → natural space first.

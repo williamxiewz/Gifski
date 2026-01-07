@@ -377,8 +377,7 @@ private struct _EditScreen: View {
 	}
 
 	private var conversionSettings: GIFGenerator.Conversion {
-		print("resizableDimensions:", resizableDimensions.pixels, resizableDimensions.percent)
-		return .init(
+		.init(
 			asset: modifiedAsset,
 			sourceURL: url,
 			timeRange: timeRange,
@@ -571,7 +570,6 @@ private struct DimensionsSetting: View {
 			.labelsHidden()
 		}
 		.onAppear {
-			print("EDIT SCREEN - onappear")
 			setUpDimensions()
 			updateTextFieldsForCurrentDimensions()
 			showArrowKeyTipIfNeeded()
@@ -653,10 +651,8 @@ private struct DimensionsSetting: View {
 	}
 
 	private func applyWidth() {
-		print("widthMinMax", resizableDimensions.widthMinMax)
 		resizableDimensions = resizableDimensions.aspectResized(usingWidth: width.toDouble)
 		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
-		print("widthMinMax2", resizableDimensions.widthMinMax)
 	}
 
 	private func applyHeight() {
@@ -667,18 +663,15 @@ private struct DimensionsSetting: View {
 
 	private func applyPercent() {
 		resizableDimensions = .percent(percent.toDouble / 100, originalSize: videoDimensions)
-		print("GGG", resizableDimensions)
 		width = resizableDimensions.pixels.width.toDouble.clamped(to: resizableDimensions.widthMinMax).toIntAndClampingIfNeeded
 		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
-		print("GGG2", percent, width, height)
 		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: true)
 	}
 
 	private func updateTextFieldsForCurrentDimensions() {
 		width = resizableDimensions.pixels.width.toDouble.clamped(to: resizableDimensions.widthMinMax).toIntAndClampingIfNeeded
-				height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
+		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
 		percent = (resizableDimensions.percent * 100).rounded().toIntAndClampingIfNeeded
-		print("FF", resizableDimensions.percent.toIntAndClampingIfNeeded)
 		selectPredefinedSizeBasedOnCurrentDimensions()
 	}
 

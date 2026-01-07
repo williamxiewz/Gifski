@@ -23,21 +23,16 @@ extension CropSettings {
 		return image.cropping(to: transformedCrop)
 	}
 
-	func unnormalizedCropRect(sizeInPreferredTransformationSpace preferredSize: CGSize) -> CGRect {
-		guard let trackPreferredTransform else {
-			guard let cropRect = crop else {
-				return .init(origin: .zero, size: preferredSize)
-			}
-			return cropRect.unnormalize(forDimensions: preferredSize)
-		}
+	/**
+	Returns the unnormalized crop rect for an image that is already in the preferred transform space (i.e., already rotated).
 
-		let originalSize = CGRect(origin: .zero, size: preferredSize)
-			.applying(trackPreferredTransform.inverted()).size
+	Since `AVAssetImageGenerator.appliesPreferredTrackTransform = true` and the preview manually applies the transform, images are always pre-rotated. The crop rect (which is defined in rotated space via the UI) can be applied directly.
+	*/
+	func unnormalizedCropRect(sizeInPreferredTransformationSpace preferredSize: CGSize) -> CGRect {
 		guard let cropRect = crop else {
-			return .init(origin: .zero, size: originalSize).applying(trackPreferredTransform)
+			return .init(origin: .zero, size: preferredSize)
 		}
-		let originalCropSize = cropRect.unnormalize(forDimensions: originalSize)
-		return originalCropSize.applying(trackPreferredTransform)
+		return cropRect.unnormalize(forDimensions: preferredSize)
 	}
 
 	var croppedOutputDimensions: (width: Int, height: Int)? {

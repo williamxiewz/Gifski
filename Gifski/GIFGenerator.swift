@@ -263,7 +263,11 @@ actor GIFGenerator {
 //		)
 
 		let generator = AVAssetImageGenerator(asset: asset)
+
+		// Images are returned already rotated to match how the user sees the video.
+		// This means crop coordinates (defined in rotated space) can be applied directly.
 		generator.appliesPreferredTrackTransform = true
+
 		generator.requestedTimeToleranceBefore = .zero
 		generator.requestedTimeToleranceAfter = .zero
 
@@ -451,10 +455,28 @@ extension GIFGenerator.Conversion {
 		}
 	}
 
+	/**
+	The crop rect applied to the natural (unrotated) size of the video track.
+
+	The crop rect from the UI is defined in the preferred/rotated space (how the user sees the video). To apply it to `naturalSize`, we need to transform it from rotated space to natural space.
+	*/
 	var cropRectAppliedToNaturalSize: CGRect {
 		get async throws {
-			let size = try await asset.firstVideoTrack?.load(.naturalSize) ?? .one
-			return (crop ?? .initialCropRect).unnormalize(forDimensions: size)
+			guard let videoTrack = try await asset.firstVideoTrack else {
+				return .zero
+			}
+
+			let (naturalSize, preferredTransform) = try await videoTrack.load(.naturalSize, .preferredTransform)
+
+			// Get the rotated dimensions (how the user sees the video)
+			let rotatedSize = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform).size
+			let rotatedDimensions = CGSize(width: abs(rotatedSize.width), height: abs(rotatedSize.height))
+
+			// The crop rect is defined in rotated space, so unnormalize it using rotated dimensions
+			let cropRectInRotatedSpace = (crop ?? .initialCropRect).unnormalize(forDimensions: rotatedDimensions)
+
+			// Transform the crop rect from rotated space back to natural space
+			return cropRectInRotatedSpace.applying(preferredTransform.inverted())
 		}
 	}
 

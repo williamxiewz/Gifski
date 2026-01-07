@@ -34,9 +34,10 @@ struct TrimmingAVPlayer: NSViewControllerRepresentable {
 			nsViewController.currentItem = item
 		}
 
-		if updatePreviewState(nsViewController) {
-			forceAVPlayerToRedraw(item: nsViewController.currentItem)
-		}
+		// Always update video composition based on preview state.
+		// When preview is ON, use custom compositor. When OFF, clear it so AVPlayer handles rotation.
+		forceAVPlayerToRedraw(item: nsViewController.currentItem)
+		_ = updatePreviewState(nsViewController)
 
 		nsViewController.loopPlayback = loopPlayback
 		nsViewController.bouncePlayback = bouncePlayback
@@ -76,14 +77,22 @@ struct TrimmingAVPlayer: NSViewControllerRepresentable {
 	}
 
 	/**
-	Resets the item's video composition, forcing a redraw.
+	Sets or clears the video composition based on preview state.
+
+	When preview is OFF, we don't use the custom compositor so AVPlayer handles rotation via `preferredTransform` normally.
+	When preview is ON, we use the custom compositor which renders the preview overlay.
 	*/
 	func forceAVPlayerToRedraw(item: AVPlayerItem) {
 		guard let assetVideoComposition = (asset as? PreviewableComposition)?.videoComposition else {
 			return
 		}
 
-		item.videoComposition = assetVideoComposition.mutableCopy() as? AVMutableVideoComposition
+		if shouldShowPreview {
+			item.videoComposition = assetVideoComposition.mutableCopy() as? AVMutableVideoComposition
+		} else {
+			// Clear video composition so AVPlayer handles rotation normally.
+			item.videoComposition = nil
+		}
 	}
 }
 

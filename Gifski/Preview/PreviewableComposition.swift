@@ -40,8 +40,11 @@ final class PreviewableComposition: AVMutableComposition {
 		instruction.timeRange = CMTimeRange(start: .videoZero, duration: duration)
 		instruction.layerInstructions = [AVMutableVideoCompositionLayerInstruction(assetTrack: compositionOriginalTrack)]
 
+		// Render size in preferred space (rotated) so preview displays correctly.
+		let rotatedRect = CGRect(origin: .zero, size: trackSize).applying(preferredTransform)
+
 		videoComposition.frameDuration = frameDuration
-		videoComposition.renderSize = trackSize
+		videoComposition.renderSize = CGSize(width: abs(rotatedRect.width), height: abs(rotatedRect.height))
 		videoComposition.instructions = [instruction]
 		videoComposition.customVideoCompositorClass = PreviewVideoCompositor.self
 	}

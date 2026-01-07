@@ -5374,7 +5374,8 @@ struct AnyDropDelegate: DropDelegate {
 	var onUpdated: ((DropInfo) -> DropProposal?)?
 
 	func performDrop(info: DropInfo) -> Bool {
-		onPerform(info)
+		isTargeted?.wrappedValue = false
+		return onPerform(info)
 	}
 
 	func validateDrop(info: DropInfo) -> Bool {
