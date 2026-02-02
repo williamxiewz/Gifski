@@ -98,7 +98,7 @@ struct CompletedScreen: View {
 	}
 
 	private var controls: some View {
-		HStack(spacing: 32) {
+		HStack(spacing: 16) {
 			Button("Save", systemImage: "square.and.arrow.down") {
 				isFileExporterPresented = true
 			}
