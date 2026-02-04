@@ -5016,6 +5016,44 @@ extension Data {
 
 		return destinationUrl
 	}
+
+	/**
+	Write the data to a unique file in the given directory and return the `URL`.
+	*/
+	func writeToUniqueFile(
+		in directory: URL,
+		filename: String,
+		contentType: UTType = .data
+	) throws -> URL {
+		let resolvedFilename = filename.isEmpty ? "file" : filename
+		var destinationUrl = directory.appendingPathComponent(resolvedFilename, conformingTo: contentType)
+
+		guard destinationUrl.exists else {
+			try write(to: destinationUrl)
+			return destinationUrl
+		}
+
+		let baseName = destinationUrl.deletingPathExtension().lastPathComponent
+		let fileExtension = destinationUrl.pathExtension
+		var counter = 2
+
+		while destinationUrl.exists {
+			let numberedFilename = "\(baseName) \(counter)"
+			if fileExtension.isEmpty {
+				destinationUrl = directory.appendingPathComponent(numberedFilename, isDirectory: false)
+			} else {
+				destinationUrl = directory
+					.appendingPathComponent(numberedFilename, isDirectory: false)
+					.appendingPathExtension(fileExtension)
+			}
+
+			counter += 1
+		}
+
+		try write(to: destinationUrl)
+
+		return destinationUrl
+	}
 }
 
 

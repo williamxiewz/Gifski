@@ -22,6 +22,7 @@
 		E33552F12ACAC3280023AAE9 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33552F02ACAC3280023AAE9 /* AppState.swift */; };
 		E33552F32ACAC5D80023AAE9 /* StartScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33552F22ACAC5D80023AAE9 /* StartScreen.swift */; };
 		E339F011203820ED003B78FB /* GIFGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E339F010203820ED003B78FB /* GIFGenerator.swift */; };
+		E33A02D12F346A9200FD4360 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E33A02D02F346A8F00FD4360 /* SettingsScreen.swift */; };
 		E36BD7A52B9E2C2400B8D86C /* ExtendedAttributes in Frameworks */ = {isa = PBXBuildFile; productRef = E36BD7A42B9E2C2400B8D86C /* ExtendedAttributes */; };
 		E37F68E02ACAD9D1007F1A7F /* CompletedScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37F68DF2ACAD9D1007F1A7F /* CompletedScreen.swift */; };
 		E37F68E22ACAD9F1007F1A7F /* ConversionScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37F68E12ACAD9F1007F1A7F /* ConversionScreen.swift */; };
@@ -103,6 +104,7 @@
 		E33552F02ACAC3280023AAE9 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		E33552F22ACAC5D80023AAE9 /* StartScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartScreen.swift; sourceTree = "<group>"; };
 		E339F010203820ED003B78FB /* GIFGenerator.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; lineEnding = 0; path = GIFGenerator.swift; sourceTree = "<group>"; usesTabs = 1; };
+		E33A02D02F346A8F00FD4360 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
 		E37F68DF2ACAD9D1007F1A7F /* CompletedScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletedScreen.swift; sourceTree = "<group>"; };
 		E37F68E12ACAD9F1007F1A7F /* ConversionScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversionScreen.swift; sourceTree = "<group>"; };
 		E37F68E32ACADA40007F1A7F /* EditScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditScreen.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 				E33552EE2ACAC3190023AAE9 /* MainScreen.swift */,
 				E33552F22ACAC5D80023AAE9 /* StartScreen.swift */,
 				E37F68E32ACADA40007F1A7F /* EditScreen.swift */,
+				E33A02D02F346A8F00FD4360 /* SettingsScreen.swift */,
 				0CBD7F2D2E0F044C00E2C5E4 /* ExportModifiedVideo.swift */,
 				E37F68E12ACAD9F1007F1A7F /* ConversionScreen.swift */,
 				E37F68DF2ACAD9D1007F1A7F /* CompletedScreen.swift */,
@@ -355,7 +358,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastSwiftUpdateCheck = 2620;
-				LastUpgradeCheck = 2600;
+				LastUpgradeCheck = 2620;
 				ORGANIZATIONNAME = "Sindre Sorhus";
 				TargetAttributes = {
 					0E79251A2329BDBE00058B94 = {
@@ -496,6 +499,7 @@
 				E33552F12ACAC3280023AAE9 /* AppState.swift in Sources */,
 				E3A6BD112245345C00F62256 /* Constants.swift in Sources */,
 				C2040B8920435871004EE259 /* GifskiWrapper.swift in Sources */,
+				E33A02D12F346A9200FD4360 /* SettingsScreen.swift in Sources */,
 				8588EB0D22A424B800030A59 /* ResizableDimensions.swift in Sources */,
 				E3908B7426754568000723A7 /* EstimatedFileSize.swift in Sources */,
 				E33552F32ACAC5D80023AAE9 /* StartScreen.swift in Sources */,
@@ -790,6 +794,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = YG56YK5RN5;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
@@ -829,6 +834,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = YG56YK5RN5;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;

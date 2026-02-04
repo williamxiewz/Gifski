@@ -75,6 +75,9 @@ struct AppMain: App {
 				SendFeedbackButton()
 			}
 		}
+		Settings {
+			SettingsScreen()
+		}
 	}
 
 	private func setUpConfig() {

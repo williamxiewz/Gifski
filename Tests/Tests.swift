@@ -1,5 +1,6 @@
 import CoreGraphics
 import Testing
+import UniformTypeIdentifiers
 @testable import Gifski
 
 struct Tests {
@@ -270,5 +271,22 @@ struct Tests {
 
 		let percentDimensions = Dimensions.percent(0.5, originalSize: originalSize)
 		#expect(!percentDimensions.percentFormatted.hasPrefix("~"))
+	}
+
+	@Test
+	func writeToUniqueFileAddsIncrementingSuffixes() async throws {
+		let directory = try URL.uniqueTemporaryDirectory()
+		defer {
+			try? FileManager.default.removeItem(at: directory)
+		}
+
+		let data = Data("Test".utf8)
+		let firstUrl = try data.writeToUniqueFile(in: directory, filename: "Sample", contentType: .gif)
+		let secondUrl = try data.writeToUniqueFile(in: directory, filename: "Sample", contentType: .gif)
+
+		#expect(firstUrl.lastPathComponent == "Sample.gif")
+		#expect(secondUrl.lastPathComponent == "Sample 2.gif")
+		#expect(firstUrl.exists)
+		#expect(secondUrl.exists)
 	}
 }

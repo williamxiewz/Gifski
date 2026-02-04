@@ -5,6 +5,7 @@ import DockProgress
 struct ConversionScreen: View {
 	@Environment(\.dismiss) private var dismiss
 	@Environment(AppState.self) private var appState
+	@Default(.autoSaveToDownloads) private var isAutoSaveToDownloadsEnabled
 	@State private var progress = 0.0
 	@State private var timeRemaining: String?
 	@State private var startInstant: ContinuousClock.Instant?
@@ -96,6 +97,7 @@ struct ConversionScreen: View {
 
 		let filename = conversion.sourceURL.filenameWithoutExtension
 		let url = try data.writeToUniqueTemporaryFile(filename: filename, contentType: .gif)
+		autoSaveToDownloadsIfNeeded(data, filename: filename)
 		try? url.setAppAsItemCreator()
 
 		try await Task.sleep(for: .seconds(1)) // Let the progress circle finish.
@@ -111,6 +113,18 @@ struct ConversionScreen: View {
 		path.removeLast()
 		path.append(.completed(data, url))
 		appState.navigationPath = path
+	}
+
+	private func autoSaveToDownloadsIfNeeded(_ data: Data, filename: String) {
+		guard isAutoSaveToDownloadsEnabled else {
+			return
+		}
+
+		do {
+			_ = try data.writeToUniqueFile(in: .downloadsDirectory, filename: filename, contentType: .gif)
+		} catch {
+			appState.error = error
+		}
 	}
 
 	@MainActor
