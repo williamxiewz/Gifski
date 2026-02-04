@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 @testable import Gifski
 
@@ -259,5 +260,15 @@ struct Tests {
 		)
 
 		#expect(update == .seconds(50))
+	}
+
+	@Test
+	func percentFormattedMarksPixelDimensionsAsApproximate() async throws {
+		let originalSize = CGSize(width: 1920, height: 1080)
+		let pixelDimensions = Dimensions.pixels(CGSize(width: 800, height: 450), originalSize: originalSize)
+		#expect(pixelDimensions.percentFormatted.hasPrefix("~"))
+
+		let percentDimensions = Dimensions.percent(0.5, originalSize: originalSize)
+		#expect(!percentDimensions.percentFormatted.hasPrefix("~"))
 	}
 }

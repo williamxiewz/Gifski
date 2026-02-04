@@ -430,13 +430,14 @@ private struct _EditScreen: View {
 enum PredefinedSizeItem: Hashable {
 	case custom
 	case spacer
+	case label(String)
 	case dimensions(Dimensions)
 
 	var resizableDimensions: Dimensions? {
 		switch self {
 		case .dimensions(let dimensions):
 			dimensions
-		case .custom, .spacer:
+		case .custom, .spacer, .label:
 			nil
 		}
 	}
@@ -472,6 +473,12 @@ private struct DimensionsSetting: View {
 						}
 					case .spacer:
 						Divider()
+							.tag(UUID())
+					case .label(let title):
+						Text(title)
+							.font(.caption)
+							.foregroundStyle(.secondary)
+							.disabled(true)
 							.tag(UUID())
 					case .dimensions(let dimensions):
 						Text("\(dimensions.description)")
@@ -623,8 +630,10 @@ private struct DimensionsSetting: View {
 
 		predefinedSizes = [.custom]
 		predefinedSizes.append(.spacer)
+		predefinedSizes.append(.label("Pixel sizes"))
 		predefinedSizes.append(contentsOf: predefinedPixelDimensions.map { .dimensions($0) })
 		predefinedSizes.append(.spacer)
+		predefinedSizes.append(.label("Exact percent"))
 		predefinedSizes.append(contentsOf: predefinedPercentDimensions.map { .dimensions($0) })
 
 		selectPredefinedSizeBasedOnCurrentDimensions()
@@ -636,7 +645,7 @@ private struct DimensionsSetting: View {
 		}
 
 		switch selectedSize {
-		case .custom, .spacer:
+		case .custom, .spacer, .label:
 			break
 		case .dimensions(let dimensions):
 			dimensionsType = dimensions.isPercent ? .percent : .pixels

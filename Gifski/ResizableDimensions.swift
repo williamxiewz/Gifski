@@ -48,10 +48,22 @@ extension Dimensions {
 	}
 
 	/**
-	The percent value formatted as a percentage string (e.g., "75%").
+	The percent value formatted as a percentage string (e.g., "75%"). For pixel-based values, the string is prefixed with "~" to indicate approximation.
 	*/
 	var percentFormatted: String {
-		String(format: "%.0f%%", percent * 100)
+		let percentValue = percent * 100
+		let formattedPercent = String(format: "%.0f%%", percentValue)
+
+		guard percentValue != 100 else {
+			return formattedPercent
+		}
+
+		switch self {
+		case .pixels:
+			return "~\(formattedPercent)"
+		case .percent:
+			return formattedPercent
+		}
 	}
 
 	var isPercent: Bool {
