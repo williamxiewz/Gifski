@@ -1,11 +1,12 @@
 import SwiftUI
 
-// TODO: Rewrite the whole estimation thing.
-
 @MainActor
 @Observable
 final class EstimatedFileSizeModel {
 	var estimatedFileSize: String?
+	/**
+	Calibrated naive estimate shown while the sampling estimate is running.
+	*/
 	var estimatedFileSizeNaive: String?
 	var error: Error?
 
@@ -16,9 +17,14 @@ final class EstimatedFileSizeModel {
 	private var gifski: GIFGenerator?
 	private var estimationTask: Task<Void, Never>?
 	private var durationTask: Task<Void, Never>?
+	private var fileSizeEstimateCalibration = FileSizeEstimateCalibration()
 
-	private func getEstimatedFileSizeNaive() async -> String {
-		await Int(getNaiveEstimate()).formatted(.byteCount(style: .file))
+	private func formattedCalibratedNaiveEstimate(fromNaiveBytes naiveBytes: Double) -> String {
+		formattedFileSize(fileSizeEstimateCalibration.calibratedBytes(fromNaiveBytes: naiveBytes))
+	}
+
+	private func formattedFileSize(_ bytes: Double) -> String {
+		Int(bytes).formatted(.byteCount(style: .file))
 	}
 
 	private func _estimateFileSize() {
@@ -38,7 +44,8 @@ final class EstimatedFileSizeModel {
 		}
 
 		estimationTask = Task {
-			estimatedFileSizeNaive = await getEstimatedFileSizeNaive()
+			let naiveBytes = await getNaiveEstimateBytes()
+			estimatedFileSizeNaive = formattedCalibratedNaiveEstimate(fromNaiveBytes: naiveBytes)
 
 			guard let settings = getConversionSettings?() else {
 				return
@@ -54,14 +61,15 @@ final class EstimatedFileSizeModel {
 
 				try Task.checkCancellation()
 
-				estimatedFileSize = Int(fileSize).formatted(.byteCount(style: .file))
+				fileSizeEstimateCalibration.update(naiveBytes: naiveBytes, betterBytes: fileSize)
+				estimatedFileSize = formattedFileSize(fileSize)
 			} catch {
 				guard !(error is CancellationError) else {
 					return
 				}
 
 				if case .notEnoughFrames = error as? GIFGenerator.Error {
-					estimatedFileSize = await getEstimatedFileSizeNaive()
+					estimatedFileSize = formattedCalibratedNaiveEstimate(fromNaiveBytes: naiveBytes)
 				} else {
 					self.error = error
 				}
@@ -73,7 +81,7 @@ final class EstimatedFileSizeModel {
 		Debouncer.debounce(delay: .seconds(0.5), action: _estimateFileSize)
 	}
 
-	private func getNaiveEstimate() async -> Double {
+	private func getNaiveEstimateBytes() async -> Double {
 		guard
 			let conversionSettings = getConversionSettings?(),
 			let duration = try? await conversionSettings.gifDuration
@@ -137,5 +145,44 @@ struct EstimatedFileSizeView: View {
 				model.updateEstimate()
 			}
 		}
+	}
+}
+
+/**
+Improves naive file size estimates by applying a ratio learned from the latest sampling-based estimate.
+
+The calibration is intentionally lightweight: a single ratio is remembered per session and applied to subsequent naive estimates while the sampling estimate is running.
+*/
+struct FileSizeEstimateCalibration {
+	private(set) var ratio: Double?
+
+	/**
+	Updates the calibration ratio using the provided naive and sampling-based estimates.
+	*/
+	mutating func update(naiveBytes: Double, betterBytes: Double) {
+		// Avoid poisoning the calibration with invalid or degenerate samples.
+		guard
+			naiveBytes > 0,
+			betterBytes > 0,
+			naiveBytes.isFinite,
+			betterBytes.isFinite
+		else {
+			return
+		}
+
+		ratio = betterBytes / naiveBytes
+	}
+
+	/**
+	Returns the calibrated estimate for a naive byte count.
+
+	If no ratio is available yet, the naive value is returned unchanged.
+	*/
+	func calibratedBytes(fromNaiveBytes naiveBytes: Double) -> Double {
+		guard let ratio else {
+			return naiveBytes
+		}
+
+		return naiveBytes * ratio
 	}
 }

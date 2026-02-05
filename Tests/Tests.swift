@@ -289,4 +289,39 @@ struct Tests {
 		#expect(firstUrl.exists)
 		#expect(secondUrl.exists)
 	}
+
+	@Test
+	func fileSizeEstimateCalibrationUsesLatestRatio() {
+		var calibration = FileSizeEstimateCalibration()
+
+		#expect(calibration.calibratedBytes(fromNaiveBytes: 120) == 120)
+
+		calibration.update(naiveBytes: 100, betterBytes: 200)
+		#expect(calibration.calibratedBytes(fromNaiveBytes: 150) == 300)
+
+		calibration.update(naiveBytes: 200, betterBytes: 100)
+		#expect(calibration.calibratedBytes(fromNaiveBytes: 50) == 25)
+	}
+
+	@Test
+	func fileSizeEstimateCalibrationIgnoresNonPositiveValues() {
+		var calibration = FileSizeEstimateCalibration()
+
+		calibration.update(naiveBytes: 0, betterBytes: 100)
+		#expect(calibration.calibratedBytes(fromNaiveBytes: 100) == 100)
+
+		calibration.update(naiveBytes: 100, betterBytes: 0)
+		#expect(calibration.calibratedBytes(fromNaiveBytes: 100) == 100)
+	}
+
+	@Test
+	func fileSizeEstimateCalibrationIgnoresNonFiniteValues() {
+		var calibration = FileSizeEstimateCalibration()
+
+		calibration.update(naiveBytes: .infinity, betterBytes: 100)
+		#expect(calibration.calibratedBytes(fromNaiveBytes: 100) == 100)
+
+		calibration.update(naiveBytes: 100, betterBytes: .infinity)
+		#expect(calibration.calibratedBytes(fromNaiveBytes: 100) == 100)
+	}
 }
