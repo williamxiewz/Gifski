@@ -6,6 +6,15 @@ final class Gifski {
 		case forever
 		case never
 		case count(Int)
+
+		var isLooping: Bool {
+			switch self {
+			case .never:
+				false
+			case .forever, .count:
+				true
+			}
+		}
 	}
 
 	private var wrapper: GifskiWrapper?

@@ -13,6 +13,7 @@ extension Defaults.Keys {
 	static let outputFPS = Key<Int>("outputFPS", default: 10)
 	static let loopGIF = Key<Bool>("loopGif", default: true)
 	static let bounceGIF = Key<Bool>("bounceGif", default: false)
+	static let loopDelay = Key<Double>("loopDelay", default: 0)
 	static let suppressKeyframeWarning = Key<Bool>("suppressKeyframeWarning", default: false)
 	static let suppressLargeGIFWarning = Key<Bool>("suppressLargeGIFWarning", default: false)
 	static let autoSaveToDownloads = Key<Bool>("autoSaveToDownloads", default: false)

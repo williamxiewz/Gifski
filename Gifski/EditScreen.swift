@@ -38,6 +38,7 @@ private struct _EditScreen: View {
 	@Default(.bounceGIF) private var bounceGIF
 	@Default(.outputFPS) private var frameRate
 	@Default(.loopGIF) private var loopGIF
+	@Default(.loopDelay) private var loopDelay
 	@Default(.suppressKeyframeWarning) private var suppressKeyframeWarning
 	@Default(.suppressLargeGIFWarning) private var suppressLargeGIFWarning
 	@State private var url: URL
@@ -168,6 +169,9 @@ private struct _EditScreen: View {
 		}
 		.onChange(of: frameRate) {
 			estimatedFileSizeModel.updateEstimate()
+			updatePreviewOnSettingsChange()
+		}
+		.onChange(of: loopDelay) {
 			updatePreviewOnSettingsChange()
 		}
 		.alert2(
@@ -426,6 +430,7 @@ private struct _EditScreen: View {
 				return .forever
 			}(),
 			bounce: bounceGIF,
+			loopDelay: Defaults[.loopDelay],
 			crop: outputCropRect,
 			trackPreferredTransform: metadata.trackPreferredTransform
 		)
@@ -835,23 +840,49 @@ private struct QualitySetting: View {
 private struct LoopSetting: View {
 	@Default(.loopGIF) private var loop
 	@Default(.bounceGIF) private var bounce
+	@Default(.loopDelay) private var loopDelay
 	@State private var isGifLoopCountWarningPresented = false
+	@State private var isMoreOptionsPopoverPresented = false
 
 	@Binding var loopCount: Int
 
 	var body: some View {
 		LabeledContent("Loops") {
-			Stepper(
-				"Loop count",
-				value: $loopCount.intToDouble,
-				in: 0...100,
-				step: 1,
-				format: .number
-			)
-			.labelsHidden()
-			.disabled(loop)
-			Toggle("Forever", isOn: $loop)
-			Toggle("Bounce", isOn: $bounce)
+			HStack {
+				Stepper(
+					"Loop count",
+					value: $loopCount.intToDouble,
+					in: 0...100,
+					step: 1,
+					format: .number
+				)
+				.labelsHidden()
+				.disabled(loop)
+				Button("More Options", systemImage: "ellipsis") {
+					isMoreOptionsPopoverPresented.toggle()
+				}
+				.labelFillVertical()
+				.labelStyle(.iconOnly)
+				.buttonStyle(.accessoryBar)
+				.controlSize(.small)
+				.popover(isPresented: $isMoreOptionsPopoverPresented) {
+					LabeledContent("Loop delay") {
+						Stepper(
+							"Loop delay",
+							value: $loopDelay,
+							in: 0...10,
+							step: 0.5,
+							format: .number.precision(.fractionLength(1))
+						)
+						.labelsHidden()
+						Text("s")
+							.foregroundStyle(.secondary)
+					}
+					.padding()
+				}
+				Toggle("Forever", isOn: $loop)
+				Toggle("Bounce", isOn: $bounce)
+			}
 		}
 		.alert2(
 			"Animated GIF Preview Limitation",

@@ -324,4 +324,11 @@ struct Tests {
 		calibration.update(naiveBytes: 100, betterBytes: .infinity)
 		#expect(calibration.calibratedBytes(fromNaiveBytes: 100) == 100)
 	}
+
+	@Test
+	func loopDelayOffsetOnlyAppliesWhenGifLoops() {
+		#expect((Gifski.Loop.never.isLooping ? 0.4 : 0) == 0)
+		#expect((Gifski.Loop.forever.isLooping ? 0.4 : 0) == 0.4)
+		#expect((Gifski.Loop.count(3).isLooping ? 0.4 : 0) == 0.4)
+	}
 }

@@ -115,6 +115,7 @@ actor GIFGenerator {
 
 		// TODO: Use `Duration`.
 		let startTime = times.first?.seconds ?? 0
+		let loopDelayOffset = conversion.loop.isLooping ? conversion.loopDelay : 0
 
 		// TODO: Does it handle cancellation?
 
@@ -152,7 +153,7 @@ actor GIFGenerator {
 				try gifski?.addFrame(
 					image,
 					frameNumber: frameNumber,
-					presentationTimestamp: max(0, actualTime.seconds - startTime)
+					presentationTimestamp: max(0, actualTime.seconds - startTime) + loopDelayOffset
 				)
 
 				if conversion.bounce {
@@ -178,7 +179,7 @@ actor GIFGenerator {
 					// Determine the reverse timestamp by finding the expected timestamp (frame number / frame rate) and adjusting for the image generator's slippage (actualTime - requestedTime)
 					let expectedReverseTimestamp = TimeInterval(reverseFrameNumber) / TimeInterval(frameRate)
 					let timestampSlippage = actualTime - requestedTime
-					let actualReverseTimestamp = max(0, expectedReverseTimestamp + timestampSlippage.seconds)
+					let actualReverseTimestamp = max(0, expectedReverseTimestamp + timestampSlippage.seconds) + loopDelayOffset
 
 					// Prevent duplicate frame with the same frame number causing an unwanted frame at the end of the GIF.
 					if frameNumber != reverseFrameNumber {
@@ -363,11 +364,12 @@ extension GIFGenerator {
 		let asset: AVAsset
 		let sourceURL: URL
 		var timeRange: ClosedRange<Double>?
-		var quality: Double = 1
+		var quality = 1.0
 		var dimensions: (width: Int, height: Int)?
 		var frameRate: Int?
 		var loop: Gifski.Loop
 		var bounce: Bool
+		var loopDelay = 0.0
 		var crop: CropRect?
 		var trackPreferredTransform: CGAffineTransform?
 	}

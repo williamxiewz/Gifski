@@ -6544,3 +6544,32 @@ extension ClosedRange<Double> {
 		(lhs.lowerBound * rhs) ... (lhs.upperBound * rhs)
 	}
 }
+
+
+extension View {
+	/**
+	Makes the underlying label fill the available vertical space.
+
+	Because this style re-wraps the content in a `Label`, you can apply additional label styles further up the view hierarchy:
+
+	```swift
+	Button("Title", systemImage: "star")
+		.labelFillVertical()
+		.labelStyle(.titleOnly)
+	```
+	*/
+	func labelFillVertical() -> some View {
+		labelStyle(VerticalFillLabelStyle())
+	}
+}
+
+struct VerticalFillLabelStyle: LabelStyle {
+	func makeBody(configuration: Configuration) -> some View {
+		Label {
+			configuration.title
+		} icon: {
+			configuration.icon
+		}
+		.fillFrame(.vertical)
+	}
+}
