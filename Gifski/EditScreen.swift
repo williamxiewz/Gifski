@@ -177,12 +177,12 @@ private struct _EditScreen: View {
 		)
 		.dialogSuppressionToggle(isSuppressed: $suppressKeyframeWarning)
 		.alert2(
-			"Large GIF Warning",
+			"Large GIF",
 			message: "The GIF format is very inefficient at high resolutions. The resulting file will be very large and slow to create. Consider reducing the dimensions.",
 			isPresented: $isLargeGIFWarningPresented
 		) {
 			Button("Convert Anyway") {
-				appState.navigationPath.append(.conversion(conversionSettings))
+				convert()
 			}
 			Button("Cancel", role: .cancel) {}
 		}
@@ -381,17 +381,33 @@ private struct _EditScreen: View {
 				{
 					isLargeGIFWarningPresented = true
 				} else {
-					appState.navigationPath.append(.conversion(conversionSettings))
+					convert()
 				}
 			}
 			.keyboardShortcut(.defaultAction)
+			.disabled(!hasEnoughFrames)
 			.padding(.top, -1) // Makes the bar have equal spacing on top and bottom.
 		}
 		.overlay {
-			EstimatedFileSizeView(model: estimatedFileSizeModel)
+			if hasEnoughFrames {
+				EstimatedFileSizeView(model: estimatedFileSizeModel)
+			} else {
+				Label("Not enough frames. Increase the duration or frame rate.", systemImage: "exclamationmark.triangle.fill")
+					.foregroundStyle(.yellow)
+					.font(.caption)
+			}
 		}
 		.padding()
 		.padding(.top, -16)
+	}
+
+	private var hasEnoughFrames: Bool {
+		let duration = conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange, withBounce: false)
+		return Int(duration.toTimeInterval * Double(frameRate)) >= 2
+	}
+
+	private func convert() {
+		appState.navigationPath.append(.conversion(conversionSettings))
 	}
 
 	private var conversionSettings: GIFGenerator.Conversion {
