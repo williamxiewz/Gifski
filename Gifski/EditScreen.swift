@@ -39,6 +39,7 @@ private struct _EditScreen: View {
 	@Default(.outputFPS) private var frameRate
 	@Default(.loopGIF) private var loopGIF
 	@Default(.suppressKeyframeWarning) private var suppressKeyframeWarning
+	@Default(.suppressLargeGIFWarning) private var suppressLargeGIFWarning
 	@State private var url: URL
 	@State private var asset: AVAsset
 	@State private var modifiedAsset: AVAsset
@@ -49,6 +50,7 @@ private struct _EditScreen: View {
 	@State private var loopCount = 0
 	@State private var isKeyframeRateChecked = false
 	@State private var isReversePlaybackWarningPresented = false
+	@State private var isLargeGIFWarningPresented = false
 	@State private var resizableDimensions = Dimensions.percent(1, originalSize: .init(widthHeight: 100))
 	@State private var shouldShow = false
 	@State private var fullPreviewState = FullPreviewGenerationEvent.initialState
@@ -174,6 +176,17 @@ private struct _EditScreen: View {
 			isPresented: $isReversePlaybackWarningPresented
 		)
 		.dialogSuppressionToggle(isSuppressed: $suppressKeyframeWarning)
+		.alert2(
+			"Large GIF Warning",
+			message: "The GIF format is very inefficient at high resolutions. The resulting file will be very large and slow to create. Consider reducing the dimensions.",
+			isPresented: $isLargeGIFWarningPresented
+		) {
+			Button("Convert Anyway") {
+				appState.navigationPath.append(.conversion(conversionSettings))
+			}
+			Button("Cancel", role: .cancel) {}
+		}
+		.dialogSuppressionToggle(isSuppressed: $suppressLargeGIFWarning)
 		.opacity(shouldShow ? 1 : 0)
 		.onAppear {
 			setUp()
@@ -361,7 +374,15 @@ private struct _EditScreen: View {
 		HStack {
 			Spacer()
 			Button("Convert") {
-				appState.navigationPath.append(.conversion(conversionSettings))
+				if
+					!suppressLargeGIFWarning,
+					resizableDimensions.pixels.longestSide >= 1200,
+					conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange) > .seconds(5)
+				{
+					isLargeGIFWarningPresented = true
+				} else {
+					appState.navigationPath.append(.conversion(conversionSettings))
+				}
 			}
 			.keyboardShortcut(.defaultAction)
 			.padding(.top, -1) // Makes the bar have equal spacing on top and bottom.
