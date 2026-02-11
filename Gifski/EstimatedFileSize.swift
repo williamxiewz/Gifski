@@ -17,6 +17,7 @@ final class EstimatedFileSizeModel {
 	private var gifski: GIFGenerator?
 	private var estimationTask: Task<Void, Never>?
 	private var durationTask: Task<Void, Never>?
+	private var estimateRequestID = 0
 	private var fileSizeEstimateCalibration = FileSizeEstimateCalibration()
 
 	private func formattedCalibratedNaiveEstimate(fromNaiveBytes naiveBytes: Double) -> String {
@@ -31,6 +32,8 @@ final class EstimatedFileSizeModel {
 		// Cancel any previous tasks to prevent stale results from overwriting newer ones.
 		estimationTask?.cancel()
 		durationTask?.cancel()
+		estimateRequestID += 1
+		let estimateRequestID = self.estimateRequestID
 
 		self.gifski = nil
 		let gifski = GIFGenerator()
@@ -40,11 +43,23 @@ final class EstimatedFileSizeModel {
 
 		durationTask = Task {
 			// TODO: Improve.
-			duration = (try? await getConversionSettings?().gifDuration) ?? .zero
+			let updatedDuration = (try? await getConversionSettings?().gifDuration) ?? .zero
+			guard estimateRequestID == self.estimateRequestID else {
+				return
+			}
+
+			duration = updatedDuration
 		}
 
 		estimationTask = Task {
 			let naiveBytes = await getNaiveEstimateBytes()
+			guard
+				!Task.isCancelled,
+				estimateRequestID == self.estimateRequestID
+			else {
+				return
+			}
+
 			estimatedFileSizeNaive = formattedCalibratedNaiveEstimate(fromNaiveBytes: naiveBytes)
 
 			guard let settings = getConversionSettings?() else {
@@ -60,11 +75,18 @@ final class EstimatedFileSizeModel {
 				let fileSize = await (Double(data.count) * gifski.sizeMultiplierForEstimation) * 1.1
 
 				try Task.checkCancellation()
+				guard estimateRequestID == self.estimateRequestID else {
+					return
+				}
 
 				fileSizeEstimateCalibration.update(naiveBytes: naiveBytes, betterBytes: fileSize)
 				estimatedFileSize = formattedFileSize(fileSize)
 			} catch {
-				guard !(error is CancellationError) else {
+				guard
+					!Task.isCancelled,
+					!(error is CancellationError),
+					estimateRequestID == self.estimateRequestID
+				else {
 					return
 				}
 

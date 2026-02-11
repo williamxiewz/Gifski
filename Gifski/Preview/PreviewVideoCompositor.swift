@@ -10,6 +10,8 @@ final class PreviewVideoCompositor: NSObject, AVVideoCompositing {
 		case failedToGetVideoFrame
 	}
 
+	private let pendingRequestTaskStore = PendingRequestTaskStore(label: "PreviewVideoCompositor.pendingRequestTaskQueue")
+
 	@MainActor
 	private var state = State()
 
@@ -36,16 +38,24 @@ final class PreviewVideoCompositor: NSObject, AVVideoCompositing {
 		}
 
 		let wrapped = WrappedRequest(value: unwrappedRequest)
-
-		Task.detached(priority: .userInitiated) {
+		let requestID = ObjectIdentifier(unwrappedRequest)
+		_ = pendingRequestTaskStore.makeTask(for: requestID, priority: .userInitiated) {
 			let asyncVideoCompositionRequest = wrapped.value
 			let compositionTime = asyncVideoCompositionRequest.compositionTime
+
+			guard !self.finishCancelledRequestIfNeeded(asyncVideoCompositionRequest) else {
+				return
+			}
 
 			guard
 				let outputFrame = asyncVideoCompositionRequest.renderContext.newPixelBuffer(),
 				let sourceTrackID = asyncVideoCompositionRequest.sourceTrackIDs.first,
 				let originalFrame = asyncVideoCompositionRequest.sourceFrame(byTrackID: sourceTrackID.int32Value)
 			else {
+				guard !self.finishCancelledRequestIfNeeded(asyncVideoCompositionRequest) else {
+					return
+				}
+
 				asyncVideoCompositionRequest.finish(with: Error.failedToGetVideoFrame)
 				return
 			}
@@ -57,14 +67,28 @@ final class PreviewVideoCompositor: NSObject, AVVideoCompositing {
 					compositionTime: compositionTime
 				)
 
+				guard !self.finishCancelledRequestIfNeeded(asyncVideoCompositionRequest) else {
+					return
+				}
+
 				asyncVideoCompositionRequest.finish(withComposedVideoFrame: outputFrame)
+			} catch is CancellationError {
+				asyncVideoCompositionRequest.finishCancelledRequest()
 			} catch {
+				guard !self.finishCancelledRequestIfNeeded(asyncVideoCompositionRequest) else {
+					return
+				}
+
 				assertionFailure("Failed to render preview frame: \(error)")
 
 				try? await PreviewRenderer.shared.renderOriginal(
 					from: originalFrame.previewSendable,
 					to: outputFrame.previewSendable
 				)
+
+				guard !self.finishCancelledRequestIfNeeded(asyncVideoCompositionRequest) else {
+					return
+				}
 
 				asyncVideoCompositionRequest.finish(withComposedVideoFrame: outputFrame)
 			}
@@ -80,8 +104,68 @@ final class PreviewVideoCompositor: NSObject, AVVideoCompositing {
 		kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
 	]
 
+	func cancelAllPendingVideoCompositionRequests() {
+		pendingRequestTaskStore.cancelAll()
+	}
+
 	func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {
 		// no-op
+	}
+
+	private func finishCancelledRequestIfNeeded(_ request: AVAsynchronousVideoCompositionRequest) -> Bool {
+		guard Task.isCancelled else {
+			return false
+		}
+
+		request.finishCancelledRequest()
+		return true
+	}
+}
+
+final class PendingRequestTaskStore {
+	private let queue: DispatchQueue
+	private var tasks = [ObjectIdentifier: Task<Void, Never>]()
+
+	init(label: String) {
+		self.queue = DispatchQueue(label: label)
+	}
+
+	@discardableResult
+	func makeTask(
+		for requestID: ObjectIdentifier,
+		priority: TaskPriority,
+		operation: @escaping @Sendable () async -> Void
+	) -> Task<Void, Never> {
+		queue.sync {
+			let task = Task.detached(priority: priority) {
+				defer {
+					self.removeTask(for: requestID)
+				}
+
+				await operation()
+			}
+
+			tasks[requestID] = task
+			return task
+		}
+	}
+
+	private func removeTask(for requestID: ObjectIdentifier) {
+		queue.sync {
+			tasks[requestID] = nil
+		}
+	}
+
+	func cancelAll() {
+		let requestTasks = queue.sync {
+			let requestTasks = Array(tasks.values)
+			tasks.removeAll()
+			return requestTasks
+		}
+
+		for requestTask in requestTasks {
+			requestTask.cancel()
+		}
 	}
 }
 

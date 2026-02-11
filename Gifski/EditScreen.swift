@@ -327,6 +327,10 @@ private struct _EditScreen: View {
 			isTrimmerDraggable: appState.isCropActive
 		) { timeRange in
 			DispatchQueue.main.async {
+				guard self.timeRange != timeRange else {
+					return
+				}
+
 				self.timeRange = timeRange
 				estimatedFileSizeModel.updateEstimate()
 				updatePreviewOnSettingsChange()
@@ -471,27 +475,57 @@ private struct _EditScreen: View {
 
 enum PredefinedSizeItem: Hashable {
 	case custom
-	case spacer
-	case label(String)
 	case dimensions(Dimensions)
 
-	var resizableDimensions: Dimensions? {
-		switch self {
-		case .dimensions(let dimensions):
-			dimensions
-		case .custom, .spacer, .label:
-			nil
+	static func selectedPredefinedSize(
+		resizableDimensions: Dimensions,
+		predefinedPixelDimensions: [Dimensions],
+		predefinedPercentDimensions: [Dimensions],
+		activeDimensionType: DimensionType,
+		forceCustom: Bool = false
+	) -> Self {
+		if forceCustom {
+			return .custom
+		}
+
+		switch activeDimensionType {
+		case .pixels:
+			guard
+				let selectedDimensions = predefinedPixelDimensions.first(where: { $0 == resizableDimensions })
+			else {
+				/*
+				Do not auto-select a percent preset while editing pixels.
+				Changing `selectedPredefinedSize` triggers `updateDimensionsBasedOnSelection`, which would switch `dimensionsType` to percent and unexpectedly flip the input mode.
+				*/
+				return .custom
+			}
+
+			return .dimensions(selectedDimensions)
+		case .percent:
+			guard
+				let selectedDimensions = predefinedPercentDimensions.first(where: { $0 == resizableDimensions })
+			else {
+				/*
+				Do not auto-select a pixel preset while editing percent.
+				This keeps the current input mode stable and avoids a surprising type switch.
+				*/
+				return .custom
+			}
+
+			return .dimensions(selectedDimensions)
 		}
 	}
 }
 
 private struct DimensionsSetting: View {
-	@State private var predefinedSizes = [PredefinedSizeItem]()
-	@State private var selectedPredefinedSize: PredefinedSizeItem?
+	@State private var predefinedPixelDimensions = [Dimensions]()
+	@State private var predefinedPercentDimensions = [Dimensions]()
+	@State private var selectedPredefinedSize = PredefinedSizeItem.custom
 	@State private var dimensionsType = DimensionType.pixels
 	@State private var width = 0
 	@State private var height = 0
 	@State private var percent = 0
+	@State private var isSynchronizingTextFields = false
 	@State private var isArrowKeyTipPresented = false
 
 	let videoDimensions: CGSize
@@ -500,31 +534,29 @@ private struct DimensionsSetting: View {
 	var body: some View {
 		VStack(spacing: 16) {
 			Picker("Dimensions", selection: $selectedPredefinedSize) {
-				ForEach(predefinedSizes, id: \.self) { size in
-					switch size {
-					case .custom:
-						if selectedPredefinedSize == .custom {
-							let string = switch dimensionsType {
-							case .pixels:
-								resizableDimensions.percentFormatted
-							case .percent:
-								resizableDimensions.pixels.formatted
-							}
-							Text("Custom — \(string)")
-								.tag(size as PredefinedSizeItem?)
-						}
-					case .spacer:
-						Divider()
-							.tag(UUID())
-					case .label(let title):
-						Text(title)
-							.font(.caption)
-							.foregroundStyle(.secondary)
-							.disabled(true)
-							.tag(UUID())
-					case .dimensions(let dimensions):
+				if selectedPredefinedSize == .custom {
+					let string = switch dimensionsType {
+					case .pixels:
+						resizableDimensions.percentFormatted
+					case .percent:
+						resizableDimensions.pixels.formatted
+					}
+
+					Text("Custom — \(string)")
+						.tag(PredefinedSizeItem.custom)
+				}
+				Section("Pixel sizes") {
+					ForEach(predefinedPixelDimensions, id: \.self) { dimensions in
+						let predefinedSize = PredefinedSizeItem.dimensions(dimensions)
 						Text("\(dimensions.description)")
-							.tag(size as PredefinedSizeItem?)
+							.tag(predefinedSize)
+					}
+				}
+				Section("Exact percent") {
+					ForEach(predefinedPercentDimensions, id: \.self) { dimensions in
+						let predefinedSize = PredefinedSizeItem.dimensions(dimensions)
+						Text("\(dimensions.description)")
+							.tag(predefinedSize)
 					}
 				}
 			}
@@ -550,6 +582,10 @@ private struct DimensionsSetting: View {
 								)
 								.frame(width: textFieldWidth)
 								.onChange(of: width) {
+									guard !isSynchronizingTextFields else {
+										return
+									}
+
 									applyWidth()
 								}
 							}
@@ -576,6 +612,10 @@ private struct DimensionsSetting: View {
 								)
 								.frame(width: textFieldWidth)
 								.onChange(of: height) {
+									guard !isSynchronizingTextFields else {
+										return
+									}
+
 									applyHeight()
 								}
 							}
@@ -593,6 +633,10 @@ private struct DimensionsSetting: View {
 							)
 							.frame(width: 36)
 							.onChange(of: percent) {
+								guard !isSynchronizingTextFields else {
+									return
+								}
+
 								applyPercent()
 							}
 						}
@@ -670,77 +714,101 @@ private struct DimensionsSetting: View {
 			Dimensions.percent($0 / 100, originalSize: videoDimensions)
 		}
 
-		predefinedSizes = [.custom]
-		predefinedSizes.append(.spacer)
-		predefinedSizes.append(.label("Pixel sizes"))
-		predefinedSizes.append(contentsOf: predefinedPixelDimensions.map { .dimensions($0) })
-		predefinedSizes.append(.spacer)
-		predefinedSizes.append(.label("Exact percent"))
-		predefinedSizes.append(contentsOf: predefinedPercentDimensions.map { .dimensions($0) })
-
+		self.predefinedPixelDimensions = predefinedPixelDimensions
+		self.predefinedPercentDimensions = predefinedPercentDimensions
 		selectPredefinedSizeBasedOnCurrentDimensions()
 	}
 
-	private func updateDimensionsBasedOnSelection(_ selectedSize: PredefinedSizeItem?) {
-		guard let selectedSize else {
+	private func updateDimensionsBasedOnSelection(_ selectedSize: PredefinedSizeItem) {
+		guard case .dimensions(let dimensions) = selectedSize else {
+			synchronizeTextFieldsWithCurrentDimensions()
 			return
 		}
 
-		switch selectedSize {
-		case .custom, .spacer, .label:
-			break
-		case .dimensions(let dimensions):
-			dimensionsType = dimensions.isPercent ? .percent : .pixels
-			resizableDimensions = dimensions
-		}
+		dimensionsType = dimensions.isPercent ? .percent : .pixels
+		resizableDimensions = dimensions
 
-		updateTextFieldsForCurrentDimensions()
+		synchronizeTextFieldsWithCurrentDimensions()
 	}
 
 	private func applyWidth() {
+		guard dimensionsType == .pixels else {
+			selectPredefinedSizeBasedOnCurrentDimensions()
+			return
+		}
+
+		let currentWidth = resizableDimensions.pixels.width.toDouble.clamped(to: resizableDimensions.widthMinMax).toIntAndClampingIfNeeded
+		guard width != currentWidth else {
+			selectPredefinedSizeBasedOnCurrentDimensions()
+			return
+		}
+
+		let previousDimensions = resizableDimensions
 		resizableDimensions = resizableDimensions.aspectResized(usingWidth: width.toDouble)
-		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
-		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: true)
+		synchronizeTextFieldsWithCurrentDimensions()
+		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: previousDimensions != resizableDimensions)
 	}
 
 	private func applyHeight() {
+		guard dimensionsType == .pixels else {
+			selectPredefinedSizeBasedOnCurrentDimensions()
+			return
+		}
+
+		let currentHeight = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
+		guard height != currentHeight else {
+			selectPredefinedSizeBasedOnCurrentDimensions()
+			return
+		}
+
+		let previousDimensions = resizableDimensions
 		resizableDimensions = resizableDimensions.aspectResized(usingHeight: height.toDouble)
-		width = resizableDimensions.pixels.width.toDouble.clamped(to: resizableDimensions.widthMinMax).toIntAndClampingIfNeeded
-		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: true)
+		synchronizeTextFieldsWithCurrentDimensions()
+		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: previousDimensions != resizableDimensions)
 	}
 
 	private func applyPercent() {
+		guard dimensionsType == .percent else {
+			selectPredefinedSizeBasedOnCurrentDimensions()
+			return
+		}
+
+		let currentPercent = (resizableDimensions.percent * 100).rounded().toIntAndClampingIfNeeded
+		guard percent != currentPercent else {
+			selectPredefinedSizeBasedOnCurrentDimensions()
+			return
+		}
+
+		let previousDimensions = resizableDimensions
 		resizableDimensions = .percent(percent.toDouble / 100, originalSize: videoDimensions)
-		width = resizableDimensions.pixels.width.toDouble.clamped(to: resizableDimensions.widthMinMax).toIntAndClampingIfNeeded
-		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
-		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: true)
+		synchronizeTextFieldsWithCurrentDimensions()
+		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: previousDimensions != resizableDimensions)
 	}
 
 	private func updateTextFieldsForCurrentDimensions() {
-		width = resizableDimensions.pixels.width.toDouble.clamped(to: resizableDimensions.widthMinMax).toIntAndClampingIfNeeded
-		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
-		percent = (resizableDimensions.percent * 100).rounded().toIntAndClampingIfNeeded
+		synchronizeTextFieldsWithCurrentDimensions()
 		selectPredefinedSizeBasedOnCurrentDimensions()
 	}
 
+	private func synchronizeTextFieldsWithCurrentDimensions() {
+		isSynchronizingTextFields = true
+		defer {
+			isSynchronizingTextFields = false
+		}
+
+		width = resizableDimensions.pixels.width.toDouble.clamped(to: resizableDimensions.widthMinMax).toIntAndClampingIfNeeded
+		height = resizableDimensions.pixels.height.toDouble.clamped(to: resizableDimensions.heightMinMax).toIntAndClampingIfNeeded
+		percent = (resizableDimensions.percent * 100).rounded().toIntAndClampingIfNeeded
+	}
+
 	private func selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: Bool = false) {
-		if forceCustom {
-			selectedPredefinedSize = .custom
-			return
-		}
-
-		guard let index = (predefinedSizes.first { size in
-			guard case .dimensions(let dimensions) = size else {
-				return false
-			}
-
-			return dimensions == resizableDimensions
-		}) else {
-			selectedPredefinedSize = .custom
-			return
-		}
-
-		selectedPredefinedSize = index
+		selectedPredefinedSize = PredefinedSizeItem.selectedPredefinedSize(
+			resizableDimensions: resizableDimensions,
+			predefinedPixelDimensions: predefinedPixelDimensions,
+			predefinedPercentDimensions: predefinedPercentDimensions,
+			activeDimensionType: dimensionsType,
+			forceCustom: forceCustom
+		)
 	}
 
 	private func showArrowKeyTipIfNeeded() {

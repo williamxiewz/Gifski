@@ -36,8 +36,17 @@ struct TrimmingAVPlayer: NSViewControllerRepresentable {
 
 		// Always update video composition based on preview state.
 		// When preview is ON, use custom compositor. When OFF, clear it so AVPlayer handles rotation.
-		forceAVPlayerToRedraw(item: nsViewController.currentItem)
-		_ = updatePreviewState(nsViewController)
+		let currentItem = nsViewController.currentItem
+		if
+			currentItem.videoComposition == nil,
+			shouldShowPreview,
+			fullPreviewState.canShowPreview
+		{
+			forceAVPlayerToRedraw(item: currentItem)
+		}
+
+		let didUpdatePreviewState = updatePreviewState(nsViewController)
+		forceAVPlayerToRedraw(item: currentItem, forceRedraw: didUpdatePreviewState)
 
 		nsViewController.loopPlayback = loopPlayback
 		nsViewController.bouncePlayback = bouncePlayback
@@ -82,17 +91,21 @@ struct TrimmingAVPlayer: NSViewControllerRepresentable {
 	When preview is OFF, we don't use the custom compositor so AVPlayer handles rotation via `preferredTransform` normally.
 	When preview is ON, we use the custom compositor which renders the preview overlay.
 	*/
-	func forceAVPlayerToRedraw(item: AVPlayerItem) {
+	func forceAVPlayerToRedraw(item: AVPlayerItem, forceRedraw: Bool = false) {
 		guard let assetVideoComposition = (asset as? PreviewableComposition)?.videoComposition else {
 			return
 		}
 
-		if shouldShowPreview {
-			item.videoComposition = assetVideoComposition
-		} else {
-			// Clear video composition so AVPlayer handles rotation normally.
-			item.videoComposition = nil
+		let shouldUsePreviewCompositor = shouldShowPreview && fullPreviewState.canShowPreview
+		let targetVideoComposition = shouldUsePreviewCompositor ? assetVideoComposition : nil
+		let hasCompositionStateChanged = (item.videoComposition != nil) != (targetVideoComposition != nil)
+		guard
+			forceRedraw || hasCompositionStateChanged
+		else {
+			return
 		}
+
+		item.videoComposition = targetVideoComposition
 	}
 }
 

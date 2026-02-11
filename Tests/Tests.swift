@@ -327,8 +327,12 @@ struct Tests {
 
 	@Test
 	func loopDelayOffsetOnlyAppliesWhenGifLoops() {
-		#expect((Gifski.Loop.never.isLooping ? 0.4 : 0) == 0)
-		#expect((Gifski.Loop.forever.isLooping ? 0.4 : 0) == 0.4)
-		#expect((Gifski.Loop.count(3).isLooping ? 0.4 : 0) == 0.4)
+		let neverOffset: Double = Gifski.Loop.never.isLooping ? 0.4 : 0
+		let foreverOffset: Double = Gifski.Loop.forever.isLooping ? 0.4 : 0
+		let countOffset: Double = Gifski.Loop.count(3).isLooping ? 0.4 : 0
+
+		#expect(neverOffset == 0)
+		#expect(foreverOffset == 0.4)
+		#expect(countOffset == 0.4)
 	}
 }
