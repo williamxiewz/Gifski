@@ -7,15 +7,19 @@ Keep in mind that Gifski is a converter, not a GIF creator. It will never suppor
 
 ■ Features
 
-- Video trimming
+- Video trimming and cropping
 - Precise control of dimensions
 - Control over GIF looping and bouncing (yo-yo) playback
 - Adjust the speed
+- Loop delay
+- GIF preview before converting
 - Copy, share, or drag the GIF
 - Share extension
 - System service
 - Optionally produce smaller lower quality GIFs
+- Automatically save GIFs to Downloads
 - Generate up to 50 FPS GIFs (for showing off design work on Dribbble)
+- Export modified video without converting to GIF
 - Shortcuts support
 
 

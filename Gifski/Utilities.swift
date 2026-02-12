@@ -544,7 +544,6 @@ extension AVAsset {
 
 extension AVAssetTrack {
 	enum VideoTrimmingError: Error {
-		case unknownAssetReaderFailure
 		case videoTrackIsEmpty
 		case assetIsMissingVideoTrack
 		case compositionCouldNotBeCreated
@@ -585,23 +584,11 @@ extension AVAssetTrack {
 
 		// Create reader for wrapped track.
 		let readerOutput = AVAssetReaderTrackOutput(track: wrappedTrack, outputSettings: nil)
-		readerOutput.alwaysCopiesSampleData = false
-
-		reader.add(readerOutput)
-		reader.startReading()
-
-		defer {
-			reader.cancelReading()
-		}
-
-		// TODO: When targeting macOS 13, use this instead: https://developer.apple.com/documentation/avfoundation/avsamplebuffergenerator/3950878-makebatch?changes=latest_minor
+		let provider = reader.outputProvider(for: readerOutput)
+		try reader.start()
 
 		// Iterate through samples until we reach one with a non-zero size.
-		while let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-			guard [.completed, .reading].contains(reader.status) else {
-				throw reader.error ?? VideoTrimmingError.unknownAssetReaderFailure
-			}
-
+		while let sampleBuffer = try await provider.next() {
 			// On first non-empty frame.
 			guard sampleBuffer.totalSampleSize == 0 else {
 				let currentTimestamp = sampleBuffer.outputPresentationTimeStamp
@@ -618,8 +605,6 @@ extension AVAssetTrack {
 extension AVAssetTrack.VideoTrimmingError: LocalizedError {
 	public var errorDescription: String? {
 		switch self {
-		case .unknownAssetReaderFailure:
-			"Asset could not be read."
 		case .videoTrackIsEmpty:
 			"Video track is empty."
 		case .assetIsMissingVideoTrack:
@@ -833,41 +818,41 @@ extension AVAssetTrack {
 		}
 	}
 
-	func getKeyframeInfo() -> VideoKeyframeInfo? {
-		guard
-			let asset,
-			let reader = try? AVAssetReader(asset: asset)
-		else {
+	func keyframeInfo() async throws -> VideoKeyframeInfo? {
+		guard let asset else {
 			return nil
 		}
 
-		let trackReaderOutput = AVAssetReaderTrackOutput(track: self, outputSettings: nil)
-		reader.add(trackReaderOutput)
-
-		guard reader.startReading() else {
-			return nil
-		}
+		let reader = try AVAssetReader(asset: asset)
+		let readerOutput = AVAssetReaderTrackOutput(track: self, outputSettings: nil)
+		let provider = reader.outputProvider(for: readerOutput)
+		try reader.start()
 
 		var frameCount = 0
 		var keyframeCount = 0
 
-		while true {
-			guard let sampleBuffer = trackReaderOutput.copyNextSampleBuffer() else {
-				reader.cancelReading()
-				break
+		while let sampleBuffer = try await provider.next() {
+			guard sampleBuffer.sampleCount > 0 else {
+				continue
 			}
 
-			if sampleBuffer.numSamples > 0 {
-				frameCount += 1
+			frameCount += 1
 
-				if sampleBuffer.sampleAttachments.first?[.notSync] == nil {
-					keyframeCount += 1
-				}
+			if sampleBuffer.sampleProperties.first?.attachments.isKeyframe ?? true {
+				keyframeCount += 1
 			}
 		}
 
 		return VideoKeyframeInfo(frameCount: frameCount, keyframeCount: keyframeCount)
 	}
+}
+
+
+extension CMSampleBuffer.SampleAttachments {
+	/**
+	Whether the sample is a sync sample (keyframe).
+	*/
+	var isKeyframe: Bool { !isNotSync }
 }
 
 
@@ -4112,7 +4097,7 @@ extension View {
 						_ = (recoveryAttempter as AnyObject).attemptRecovery(fromError: nsError, optionIndex: index)
 					}
 				}
-				Button("Cancel", role: .cancel) {}
+				Button(role: .cancel) {}
 			}
 		}
 	}

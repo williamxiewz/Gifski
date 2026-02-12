@@ -84,6 +84,20 @@ final class AppState {
 
 		// We have to include `.badge` otherwise system settings does not show the checkbox to turn off sounds. (macOS 12.4)
 		UNUserNotificationCenter.current().requestAuthorization(options: [.sound, .badge]) { _, _ in }
+
+		delay(.seconds(1)) {
+			SSApp.runOnce(identifier: "firstLaunch-3-0-0") {
+				guard !SSApp.isFirstLaunch else {
+					return
+				}
+
+				NSAlert.showModal(
+					for: NSApp.mainWindow,
+					title: "Welcome to Gifski 3",
+					message: "Gifski now supports cropping and preview.\n\nNote: Quick Look is no longer available after conversion. It was unreliable, and the preview window is now large enough on its own.\n\nKnown issue: Dragging from a Dock folder into the window may fail due to a macOS bug."
+				)
+			}
+		}
 	}
 
 	func start(_ url: URL) {

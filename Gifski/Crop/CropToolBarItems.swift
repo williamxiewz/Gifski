@@ -7,6 +7,7 @@ struct CropToolbarItems: View {
 	@Binding var isCropActive: Bool
 	let metadata: AVAsset.VideoMetadata
 	@Binding var outputCropRect: CropRect
+	let onCancel: () -> Void
 	@FocusState private var isCropToggleFocused: Bool
 
 	var body: some View {
@@ -16,21 +17,30 @@ struct CropToolbarItems: View {
 					metadata: metadata,
 					outputCropRect: $outputCropRect
 				)
+				Button(role: .cancel) {
+					onCancel()
+				}
+				.labelStyle(.iconOnly)
 			}
-			Toggle("Crop", systemImage: "crop", isOn: $isCropActive)
-				.focused($isCropToggleFocused)
-				.onChange(of: isCropActive) {
-					isCropToggleFocused = true
-					guard isCropActive else {
-						return
-					}
-					SSApp.runOnce(identifier: "showCropTooltip") {
-						showCropTooltip = true
-					}
+			Toggle(
+				"Crop",
+				systemImage: isCropActive ? "checkmark" : "crop",
+				isOn: $isCropActive
+			)
+			.keyboardShortcut(isCropActive ? .defaultAction : nil)
+			.focused($isCropToggleFocused)
+			.onChange(of: isCropActive) {
+				isCropToggleFocused = true
+				guard isCropActive else {
+					return
 				}
-				.popover(isPresented: $showCropTooltip) {
-					TipsView(title: "Crop Tips", tips: Self.tips)
+				SSApp.runOnce(identifier: "showCropTooltip") {
+					showCropTooltip = true
 				}
+			}
+			.popover(isPresented: $showCropTooltip) {
+				TipsView(title: "Crop Tips", tips: Self.tips)
+			}
 		}
 	}
 
@@ -56,10 +66,13 @@ private struct AspectRatioPicker: View {
 	@Binding var outputCropRect: CropRect
 
 	var body: some View {
-		Menu(selectionText) {
+		Menu {
 			presetSection
 			customSection
 			otherSections
+		} label: {
+			Text(selectionText)
+				.font(.system().monospacedDigit())
 		}
 		.onChange(of: customAspectRatio) {
 			guard let customAspectRatio else {
@@ -241,7 +254,7 @@ private struct CustomAspectRatioView: View {
 			.opacity(modifiedCustomField == .aspect ? 0.7 : 1)
 		}
 		.padding()
-		.frame(width: 135)
+		.fixedSize()
 	}
 }
 

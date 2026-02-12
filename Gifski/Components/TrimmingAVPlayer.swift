@@ -15,7 +15,7 @@ struct TrimmingAVPlayer: NSViewControllerRepresentable {
 	var speed = 1.0
 	var overlay: NSView?
 	var isPlayPauseButtonEnabled = true
-	var isTrimmerDraggable = false
+	var isTrimmerCollapsible = false
 	var timeRangeDidChange: ((ClosedRange<Double>) -> Void)?
 
 	func makeNSViewController(context: Context) -> NSViewControllerType {
@@ -55,7 +55,7 @@ struct TrimmingAVPlayer: NSViewControllerRepresentable {
 			nsViewController.player.rate = nsViewController.player.rate > 0 ? Float(speed) : -Float(speed)
 		}
 		nsViewController.overlay = overlay
-		nsViewController.isTrimmerDraggable = isTrimmerDraggable
+		nsViewController.isTrimmerCollapsible = isTrimmerCollapsible
 		nsViewController.isPlayPauseButtonEnabled = isPlayPauseButtonEnabled
 	}
 
@@ -122,43 +122,96 @@ final class TrimmingAVPlayerViewController: NSViewController {
 	private var cancellables = Set<AnyCancellable>()
 	private var currentItemDurationRange: ClosedRange<Double>?
 
+	private var overlayContainer: OverlayContainerView?
+
 	fileprivate var overlay: NSView? {
 		didSet {
 			guard oldValue != overlay else {
 				return
 			}
 
-			if let oldValue {
-				oldValue.removeFromSuperview()
-			}
+			oldValue?.removeFromSuperview()
+			placeOverlay()
+		}
+	}
 
-			guard let overlay else {
+	fileprivate var isTrimmerCollapsible = false {
+		didSet {
+			guard isTrimmerCollapsible != oldValue else {
 				return
 			}
 
-			let underTrimOverlayView = overlay
-			underTrimOverlayView.removeConstraints(underTrimOverlayView.constraints)
-			playerView.contentOverlayView?.addSubview(underTrimOverlayView)
-			underTrimOverlayView.translatesAutoresizingMaskIntoConstraints = false
+			if !isTrimmerCollapsible {
+				overlayContainer?.removeFromSuperview()
+				overlayContainer = nil
+			}
+
+			// Place overlay first so the container is created before the toggle button,
+			// ensuring the button is always on top in the z-order.
+			placeOverlay()
+			collapsibleTrimmer?.isCollapsible = isTrimmerCollapsible
+		}
+	}
+
+	/**
+	Places the overlay in the correct layer based on crop mode.
+
+	When cropping, the overlay goes on `playerView` (via a container) so crop handles sit above the player controls. Hit testing passes through to the trimmer area.
+
+	When not cropping, the overlay goes on `contentOverlayView` (behind controls) so the trimmer is fully accessible.
+	*/
+	private func placeOverlay() {
+		guard let overlay else {
+			return
+		}
+
+		overlay.removeFromSuperview()
+		overlay.removeConstraints(overlay.constraints)
+
+		if isTrimmerCollapsible {
+			if overlayContainer == nil {
+				let container = OverlayContainerView()
+				container.passthroughView = _collapsibleTrimmer?.trimmerWrapper
+				playerView.addSubview(container)
+				container.translatesAutoresizingMaskIntoConstraints = false
+				NSLayoutConstraint.activate([
+					container.leadingAnchor.constraint(equalTo: playerView.leadingAnchor),
+					container.topAnchor.constraint(equalTo: playerView.topAnchor),
+					container.trailingAnchor.constraint(equalTo: playerView.trailingAnchor),
+					container.bottomAnchor.constraint(equalTo: playerView.bottomAnchor)
+				])
+				overlayContainer = container
+			}
+
+			guard let overlayContainer else {
+				return
+			}
+
+			overlayContainer.addSubview(overlay)
+			overlay.translatesAutoresizingMaskIntoConstraints = false
 
 			let videoBounds = playerView.videoBounds
-
+			NSLayoutConstraint.activate([
+				overlay.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: videoBounds.origin.x),
+				overlay.topAnchor.constraint(equalTo: overlayContainer.topAnchor, constant: videoBounds.origin.y),
+				overlay.widthAnchor.constraint(equalToConstant: videoBounds.size.width),
+				overlay.heightAnchor.constraint(equalToConstant: videoBounds.size.height)
+			])
+		} else {
 			guard let contentOverlayView = playerView.contentOverlayView else {
 				return
 			}
 
-			NSLayoutConstraint.activate([
-				underTrimOverlayView.leadingAnchor.constraint(equalTo: contentOverlayView.leadingAnchor, constant: videoBounds.origin.x),
-				underTrimOverlayView.topAnchor.constraint(equalTo: contentOverlayView.topAnchor, constant: videoBounds.origin.y),
-				underTrimOverlayView.widthAnchor.constraint(equalToConstant: videoBounds.size.width),
-				underTrimOverlayView.heightAnchor.constraint(equalToConstant: videoBounds.size.height)
-			])
-		}
-	}
+			let videoBounds = playerView.videoBounds
 
-	fileprivate var isTrimmerDraggable = false {
-		didSet {
-			trimmerDragViews?.isDraggable = isTrimmerDraggable
+			contentOverlayView.addSubview(overlay)
+			overlay.translatesAutoresizingMaskIntoConstraints = false
+			NSLayoutConstraint.activate([
+				overlay.leadingAnchor.constraint(equalTo: contentOverlayView.leadingAnchor, constant: videoBounds.origin.x),
+				overlay.topAnchor.constraint(equalTo: contentOverlayView.topAnchor, constant: videoBounds.origin.y),
+				overlay.widthAnchor.constraint(equalToConstant: videoBounds.size.width),
+				overlay.heightAnchor.constraint(equalToConstant: videoBounds.size.height)
+			])
 		}
 	}
 
@@ -175,14 +228,14 @@ final class TrimmingAVPlayerViewController: NSViewController {
 	var playerView: TrimmingAVPlayerView { view as! TrimmingAVPlayerView }
 
 	// We cannot use lazy here because at start this will be `nil` before the player is initialized (there won't be an AVTrimView).
-	private var _trimmerDragViews: TrimmerDragViews?
+	private var _collapsibleTrimmer: CollapsibleTrimmer?
 
-	private var trimmerDragViews: TrimmerDragViews? {
-		if let _trimmerDragViews {
-			return _trimmerDragViews
+	private var collapsibleTrimmer: CollapsibleTrimmer? {
+		if let _collapsibleTrimmer {
+			return _collapsibleTrimmer
 		}
 
-		// Needed so that it will hide the trimmer when it is outside the view. This must be done now (as opposed to`viewDidLoad`) because layer is nil in `viewDidLoad`.
+		// Needed so that it will hide the trimmer when it is outside the view. This must be done now (as opposed to `viewDidLoad`) because layer is nil in `viewDidLoad`.
 		playerView.layer?.masksToBounds = true
 
 		guard
@@ -192,13 +245,16 @@ final class TrimmingAVPlayerViewController: NSViewController {
 			return nil
 		}
 
-		_trimmerDragViews = TrimmerDragViews(
+		let trimmer = CollapsibleTrimmer(
 			avTrimView: avTrimView,
 			avTrimViewParent: avTrimViewParent,
-			isDraggable: false
+			playerView: playerView
 		)
 
-		return _trimmerDragViews
+		overlayContainer?.passthroughView = trimmer.trimmerWrapper
+
+		_collapsibleTrimmer = trimmer
+		return trimmer
 	}
 
 	/**
@@ -495,155 +551,149 @@ final class TrimmingAVPlayerView: AVPlayerView {
 	override func cancelOperation(_ sender: Any?) {}
 }
 
+/**
+Passes through hits in the area occupied by `passthroughView` (the trimmer) so both the crop overlay and trimmer can coexist. When the trimmer is collapsed (off-screen), its frame is outside the visible area and all hits go to the crop overlay as normal.
+*/
+private class OverlayContainerView: NSView {
+	weak var passthroughView: NSView?
+
+	override func hitTest(_ point: CGPoint) -> NSView? {
+		guard !subviews.isEmpty else {
+			return nil
+		}
+
+		if
+			let passthroughView,
+			let passthroughParent = passthroughView.superview
+		{
+			let convertedPoint = convert(point, to: passthroughParent)
+			if passthroughView.frame.contains(convertedPoint) {
+				return nil
+			}
+		}
+
+		// Only claim hits that land on a subview (the overlay), not on empty container space.
+		// This ensures the toggle button behind the container remains clickable.
+		let result = super.hitTest(point)
+		return result === self ? nil : result
+	}
+}
+
 @MainActor
-private class TrimmerDragViews {
-	private var avTrimView: NSView
+private class CollapsibleTrimmer {
+	private let avTrimView: NSView
+	let trimmerWrapper: NSView
+	private let avTrimViewParent: NSView
+	private weak var playerView: NSView?
+	private var toggleButton: NSHostingView<ToggleButtonView>
+	private var isCollapsed = false
+	private let savedConstraints: SavedConstraints
 
-	/**
-	The view that holds the entire trimmer. The supermost view.
-	*/
-	private var fullTrimmerView: CustomCursorView
-
-	private var avTrimViewParent: NSView
-	private var drawHandleView: NSHostingView<DragHandleView>
-
-	var isDraggable = false {
+	var isCollapsible = false {
 		didSet {
-			if isDraggable {
-				showDrag()
+			guard isCollapsible != oldValue else {
+				return
+			}
+
+			if isCollapsible {
+				addToggleButton()
+				setCollapsed(true)
 			} else {
-				hideDrag()
+				removeToggleButton()
+				setCollapsed(false)
 			}
 		}
 	}
 
-	/**
-	The initial offset of the trimmer from the bottom before we drag it anywhere.
-	*/
-	static let dragBarHeight = 17.0
-	static let newHeight = 87.0
-	static let dragBarTopAnchor = 6.0
-
-	/**
-	These offsets are computed before we swap the trimmer.
-	*/
-	private let trimmerConstraints: TrimmerConstraints
-
-	init(avTrimView: NSView, avTrimViewParent: NSView, isDraggable: Bool) {
+	init(avTrimView: NSView, avTrimViewParent: NSView, playerView: NSView) {
 		self.avTrimView = avTrimView
 		self.avTrimViewParent = avTrimViewParent
-		self.fullTrimmerView = CustomCursorView()
-		self.drawHandleView = NSHostingView(rootView: DragHandleView())
+		self.playerView = playerView
+		self.trimmerWrapper = NSView()
+		self.savedConstraints = SavedConstraints(avTrimViewParent: avTrimViewParent)
+		self.toggleButton = NSHostingView(rootView: ToggleButtonView(isCollapsed: false) {})
 
-		self.trimmerConstraints = TrimmerConstraints(avTrimViewParent: avTrimViewParent)
-
-		swapTrimmerSuperviews()
-		self.isDraggable = isDraggable
-
-		let panGesture = NSPanGestureRecognizer(target: self, action: #selector(handleDrag(_:)))
-		panGesture.delaysPrimaryMouseButtonEvents = false
-		fullTrimmerView.addGestureRecognizer(panGesture)
+		reparentTrimmer()
+		updateToggleButton()
 	}
 
 	/**
-	Remove the `avTrimViewParent` from its old location in the view hierarchy and swap with our `fullTrimmerView`.
+	Remove the `avTrimViewParent` from its old location in the view hierarchy and wrap it in our `trimmerWrapper`.
 	*/
-	private func swapTrimmerSuperviews() {
-		// The view that previously held the full trimmer view.
+	private func reparentTrimmer() {
 		guard let oldSuperview = avTrimViewParent.superview else {
 			return
 		}
 
 		avTrimViewParent.removeFromSuperview()
 
-		fullTrimmerView.translatesAutoresizingMaskIntoConstraints = false
-		fullTrimmerView.addSubview(avTrimViewParent)
-		oldSuperview.addSubview(fullTrimmerView)
+		trimmerWrapper.translatesAutoresizingMaskIntoConstraints = false
+		trimmerWrapper.addSubview(avTrimViewParent)
+		oldSuperview.addSubview(trimmerWrapper)
 
 		avTrimViewParent.constrainEdgesToSuperview()
-
-		trimmerConstraints.apply(toNewView: fullTrimmerView, avTrimViewParentSuperView: oldSuperview)
+		savedConstraints.apply(to: trimmerWrapper, in: oldSuperview)
 	}
 
-	private func showDrag() {
-		fullTrimmerView.addSubview(drawHandleView)
-		drawHandleView.translatesAutoresizingMaskIntoConstraints = false
+	private func setCollapsed(_ collapsed: Bool) {
+		isCollapsed = collapsed
+		updateToggleButton()
 
-		NSLayoutConstraint.activate([
-			drawHandleView.leadingAnchor.constraint(equalTo: fullTrimmerView.leadingAnchor, constant: 0),
-			drawHandleView.trailingAnchor.constraint(equalTo: fullTrimmerView.trailingAnchor, constant: 0),
-			drawHandleView.topAnchor.constraint(equalTo: fullTrimmerView.topAnchor, constant: Self.dragBarTopAnchor),
-			drawHandleView.heightAnchor.constraint(equalToConstant: Self.dragBarHeight)
-		])
+		if collapsed {
+			bottomConstraint?.animate(to: savedConstraints.height, duration: .seconds(0.3)) { [weak self] in
+				guard
+					let self,
+					isCollapsed
+				else {
+					return
+				}
 
-		fullTrimmerHeightConstraint?.constant = Self.newHeight
-		trimmerWindowTopConstraint?.constant = Self.newHeight - trimmerConstraints.height
+				avTrimView.isHidden = true
+			}
+		} else {
+			avTrimView.isHidden = false
+			bottomConstraint?.animate(to: savedConstraints.bottomOffset, duration: .seconds(0.3))
+		}
+	}
 
-		trimmerBottomConstraint?.animate(to: trimmerConstraints.height, duration: .seconds(0.3)) {
-			guard self.isDraggable else {
+	private func updateToggleButton() {
+		toggleButton.rootView = ToggleButtonView(isCollapsed: isCollapsed) { [weak self] in
+			guard let self else {
 				return
 			}
 
-			self.avTrimView.isHidden = true
+			setCollapsed(!isCollapsed)
 		}
 	}
 
-	private func hideDrag() {
-		Task {
-			// Defer the NSHostingView removal to avoid reentrant layout, which happens if this code runs on the main actor
-			drawHandleView.removeFromSuperview()
-			avTrimView.isHidden = false
-			trimmerBottomConstraint?.animate(to: trimmerConstraints.bottomOffset, duration: .seconds(0.3))
-			fullTrimmerHeightConstraint?.constant = trimmerConstraints.height
-			trimmerWindowTopConstraint?.constant = 0
-		}
-	}
-
-	/**
-	Bound the view so that it can only go just a bit below the bottom and to the top. Then also bound the drag gesture so that drags outside the view bounds won't affect the drag.
-	*/
-	@objc private func handleDrag(_ gesture: NSPanGestureRecognizer) {
-		guard
-			isDraggable,
-			let view = gesture.view,
-			let superview = view.superview,
-			let trimmerBottomConstraint
-		else {
+	private func addToggleButton() {
+		guard let playerView else {
 			return
 		}
 
-		let endLocation = gesture.location(in: superview).y
-		let translation = gesture.translation(in: superview).y
-		let startLocation = endLocation - translation
+		// Added to playerView directly so it sits above the crop overlay.
+		playerView.addSubview(toggleButton)
+		toggleButton.translatesAutoresizingMaskIntoConstraints = false
 
-		defer {
-			gesture.setTranslation(.zero, in: superview)
-		}
-
-		let bounds = superview.bounds.minY...superview.bounds.maxY
-
-		guard bounds.contains(startLocation) else {
-			return
-		}
-
-		let boundedTranslation = endLocation.clamped(to: bounds) - startLocation
-		let newBottom = (trimmerBottomConstraint.constant - boundedTranslation).clamped(to: -superview.bounds.height + view.frame.height...trimmerConstraints.height)
-
-		trimmerBottomConstraint.constant = newBottom
-		avTrimView.isHidden = newBottom > trimmerConstraints.height - 2
+		NSLayoutConstraint.activate([
+			toggleButton.centerXAnchor.constraint(equalTo: playerView.centerXAnchor),
+			toggleButton.bottomAnchor.constraint(equalTo: trimmerWrapper.topAnchor),
+			toggleButton.widthAnchor.constraint(equalToConstant: 34),
+			toggleButton.heightAnchor.constraint(equalToConstant: 22)
+		])
 	}
 
-	private lazy var fullTrimmerHeightConstraint: NSLayoutConstraint? = fullTrimmerView.constraints.first { $0.firstAttribute == .height && $0.firstItem as? NSView == fullTrimmerView }
+	private func removeToggleButton() {
+		toggleButton.removeFromSuperview()
+	}
 
-	private lazy var trimmerBottomConstraint: NSLayoutConstraint? = fullTrimmerView.getConstraintFromSuperview(attribute: .bottom)
-
-	private lazy var trimmerWindowTopConstraint: NSLayoutConstraint? = avTrimView.getConstraintFromSuperview(attribute: .top)
+	private lazy var bottomConstraint: NSLayoutConstraint? = trimmerWrapper.getConstraintFromSuperview(attribute: .bottom)
 
 	/**
-	Grab the constraints on the trimmer while it is still constrained to its superview, so that when we move it to a new superview it will have no visual change.
+	Captures the trimmer's original constraints before reparenting, so the wrapper can be placed identically.
 	*/
 	@MainActor
-	private struct TrimmerConstraints {
+	private struct SavedConstraints {
 		let bottomOffset: Double
 		let leadingOffset: Double
 		let trailingOffset: Double
@@ -656,42 +706,37 @@ private class TrimmerDragViews {
 			self.height = avTrimViewParent.getConstraintConstantFromSuperView(attribute: .height) ?? 64.0
 		}
 
-		/**
-		Apply the saved constraints to a new container view, placing it in the same position as avTrimViewParent used to be.
-		*/
-		func apply(
-			toNewView newView: NSView,
-			avTrimViewParentSuperView oldSuperview: NSView
-		) {
+		func apply(to newView: NSView, in superview: NSView) {
 			NSLayoutConstraint.activate([
-				newView.leadingAnchor.constraint(equalTo: oldSuperview.leadingAnchor, constant: leadingOffset),
-				newView.bottomAnchor.constraint(equalTo: oldSuperview.bottomAnchor, constant: bottomOffset),
-				newView.trailingAnchor.constraint(equalTo: oldSuperview.trailingAnchor, constant: trailingOffset),
+				newView.leadingAnchor.constraint(equalTo: superview.leadingAnchor, constant: leadingOffset),
+				newView.bottomAnchor.constraint(equalTo: superview.bottomAnchor, constant: bottomOffset),
+				newView.trailingAnchor.constraint(equalTo: superview.trailingAnchor, constant: trailingOffset),
 				newView.heightAnchor.constraint(equalToConstant: height)
 			])
 		}
 	}
 
-	private class CustomCursorView: NSView {
-		var cursor = NSCursor.arrow
+	private struct ToggleButtonView: View {
+		@State private var isHovered = false
 
-		override func resetCursorRects() {
-			super.resetCursorRects()
-			addCursorRect(bounds, cursor: cursor)
-		}
-	}
+		let isCollapsed: Bool
+		let action: () -> Void
 
-	private struct DragHandleView: View {
 		var body: some View {
-			ZStack {
-				Color.clear
-					.contentShape(.rect)
-				RoundedRectangle(cornerRadius: 2)
-					.fill(Color.white)
-					.frame(width: 128, height: 4)
-					.padding()
-			}
-			.pointerStyle(.rowResize)
+			Button("Toggle Trimmer", systemImage: isCollapsed ? "chevron.compact.up" : "chevron.compact.down", action: action)
+				.labelStyle(.iconOnly)
+				.font(.system(size: 16, weight: .bold))
+				.foregroundStyle(.white.opacity(0.8))
+				.fillFrame()
+				.contentShape(.rect)
+				.buttonStyle(.plain)
+				.background(
+					Capsule()
+						.fill(.white.opacity(isHovered ? 0.2 : 0.05))
+				)
+				.onHover {
+					isHovered = $0
+				}
 		}
 	}
 }

@@ -121,6 +121,7 @@
 				"echo \"success: $ACTION of $SCRIPT_OUTPUT_FILE_0 for $CARGO_XCODE_TARGET_TRIPLES\"",
 				"",
 				"",
+				"",
 			);
 		};
 /* End PBXBuildRule section */
@@ -211,7 +212,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2600;
+				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					CA007E48158959EA34BF617B = {
 						CreatedOnToolsVersion = 9.2;
@@ -364,6 +365,7 @@
 				"ADDITIONAL_SDKS[sdk=w*]" = macosx;
 				"ADDITIONAL_SDKS[sdk=x*]" = macosx;
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CARGO_TARGET_DIR = "$(PROJECT_TEMP_DIR)/cargo_target";
 				CARGO_XCODE_BUILD_PROFILE = release;
 				CARGO_XCODE_FEATURES = "";
@@ -413,6 +415,7 @@
 				"ADDITIONAL_SDKS[sdk=w*]" = macosx;
 				"ADDITIONAL_SDKS[sdk=x*]" = macosx;
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CARGO_TARGET_DIR = "$(PROJECT_TEMP_DIR)/cargo_target";
 				CARGO_XCODE_BUILD_PROFILE = debug;
 				CARGO_XCODE_FEATURES = "";

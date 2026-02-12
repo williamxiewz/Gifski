@@ -58,6 +58,7 @@ private struct _EditScreen: View {
 	@State private var fullPreviewDebouncer = Debouncer(delay: .milliseconds(200))
 
 	@Binding private var outputCropRect: CropRect
+	@State private var savedCropRect: CropRect?
 	@State private var exportModifiedVideoState = ExportModifiedVideoState.idle
 	@State private var isExportModifiedVideoAudioWarningPresented = false
 	private var overlay: NSView
@@ -97,29 +98,31 @@ private struct _EditScreen: View {
 		.navigationDocument(url)
 		.toolbar {
 			ToolbarSpacer(.fixed)
-			ToolbarItem {
-				Toggle(
-					"Preview",
-					systemImage: appState.shouldShowPreview && fullPreviewState.canShowPreview ? "eye" : "eye.slash",
-					isOn: appState.toggleMode(mode: .preview)
-				)
-				.overlay(alignment: .leading) {
-					if fullPreviewState.isGenerating {
-						ProgressView(value: fullPreviewState.progress)
-							.progressViewStyle(.circular)
-							.controlSize(.mini)
-							.scaleEffect(0.8)
-							.overlay {
-								if let fullPreviewStateErrorMessage = fullPreviewState.errorMessage {
-									Color.clear
-										.popover(isPresented: .constant(true)) {
-											Text(fullPreviewStateErrorMessage)
-												.padding()
-												.frame(maxWidth: 300)
-										}
+			if !appState.isCropActive {
+				ToolbarItem {
+					Toggle(
+						"Preview",
+						systemImage: appState.shouldShowPreview && fullPreviewState.canShowPreview ? "eye" : "eye.slash",
+						isOn: appState.toggleMode(mode: .preview)
+					)
+					.overlay(alignment: .leading) {
+						if fullPreviewState.isGenerating {
+							ProgressView(value: fullPreviewState.progress)
+								.progressViewStyle(.circular)
+								.controlSize(.mini)
+								.scaleEffect(0.8)
+								.overlay {
+									if let fullPreviewStateErrorMessage = fullPreviewState.errorMessage {
+										Color.clear
+											.popover(isPresented: .constant(true)) {
+												Text(fullPreviewStateErrorMessage)
+													.padding()
+													.frame(maxWidth: 300)
+											}
+									}
 								}
-							}
-							.offset(x: -20)
+								.offset(x: -20)
+						}
 					}
 				}
 			}
@@ -128,7 +131,8 @@ private struct _EditScreen: View {
 				CropToolbarItems(
 					isCropActive: appState.toggleMode(mode: .editCrop),
 					metadata: metadata,
-					outputCropRect: $outputCropRect
+					outputCropRect: $outputCropRect,
+					onCancel: cancelCropMode
 				)
 				.focusSection()
 			}
@@ -188,7 +192,7 @@ private struct _EditScreen: View {
 			Button("Convert Anyway") {
 				convert()
 			}
-			Button("Cancel", role: .cancel) {}
+			Button(role: .cancel) {}
 		}
 		.dialogSuppressionToggle(isSuppressed: $suppressLargeGIFWarning)
 		.opacity(shouldShow ? 1 : 0)
@@ -220,6 +224,18 @@ private struct _EditScreen: View {
 				fullPreviewState = event
 			}
 		}
+		.onKeyboardShortcut(.escape, modifiers: []) {
+			if appState.isCropActive {
+				cancelCropMode()
+			}
+		}
+	}
+
+	private func cancelCropMode() {
+		if let savedCropRect {
+			outputCropRect = savedCropRect
+		}
+		appState.mode = .normal
 	}
 
 	private func onExportAsVideo() {
@@ -324,7 +340,7 @@ private struct _EditScreen: View {
 			speed: previewPaused ? 0.0 : 1.0,
 			overlay: appState.shouldShowPreview ? nil : overlay,
 			isPlayPauseButtonEnabled: !previewPaused,
-			isTrimmerDraggable: appState.isCropActive
+			isTrimmerCollapsible: appState.isCropActive
 		) { timeRange in
 			DispatchQueue.main.async {
 				guard self.timeRange != timeRange else {
@@ -338,9 +354,12 @@ private struct _EditScreen: View {
 		}
 		.onChange(of: appState.mode) {
 			if appState.mode == .editCrop {
+				savedCropRect = outputCropRect
 				Task {
 					await fullPreviewStream.cancelFullPreviewGeneration()
 				}
+			} else {
+				savedCropRect = nil
 			}
 
 			// Because we don't update the preview during editCrop, the preview may be stale.
@@ -453,7 +472,7 @@ private struct _EditScreen: View {
 		Task.detached(priority: .utility) {
 			do {
 				guard
-					let keyframeInfo = try await modifiedAsset.firstVideoTrack?.getKeyframeInfo(),
+					let keyframeInfo = try await modifiedAsset.firstVideoTrack?.keyframeInfo(),
 					keyframeInfo.keyframeInterval > maximumKeyframeInterval
 				else {
 					return

@@ -32,7 +32,7 @@ extension PickerAspectRatio {
 		forVideoDimensions dimensions: CGSize,
 		cropRect: CropRect
 	) -> String {
-		"\(description) - \(cropRect.withAspectRatio(for: self, forDimensions: dimensions).unnormalize(forDimensions: dimensions).size.videoSizeDescription)"
+		"\(description) — \(cropRect.withAspectRatio(for: self, forDimensions: dimensions).unnormalize(forDimensions: dimensions).size.videoSizeDescription)"
 	}
 
 	var aspectRatio: Double {
@@ -66,7 +66,7 @@ extension PickerAspectRatio {
 
 		let customSizeDescription = cropRect.unnormalize(forDimensions: videoDimensions).size.videoSizeDescription
 
-		return "Custom - \(customSizeDescription)"
+		return "Custom — \(customSizeDescription)"
 	}
 
 	/**

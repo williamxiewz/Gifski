@@ -37,8 +37,6 @@
 			</array>
 		</dict>
 	</array>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 	<key>MDItemKeywords</key>
 	<string>gif,convert,video</string>
 	<key>NSServices</key>

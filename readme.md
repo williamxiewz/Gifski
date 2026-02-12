@@ -15,7 +15,7 @@ You can also produce smaller lower quality GIFs when needed with the “Quality�
 
 Gifski supports all the video formats that macOS supports (`.mp4` or `.mov` with H264, HEVC, ProRes, etc). The [QuickTime Animation format](https://en.wikipedia.org/wiki/QuickTime_Animation) is not supported. Use [ProRes 4444 XQ](https://en.wikipedia.org/wiki/Apple_ProRes) instead. It's more efficient, more widely supported, and like QuickTime Animation, it also supports alpha channel.
 
-Gifski has a bunch of settings like changing dimensions, speed, frame rate, quality, looping, and more.
+Gifski has a bunch of settings like changing dimensions, speed, frame rate, quality, cropping, looping, and more.
 
 ## Download
 
@@ -25,7 +25,6 @@ Requires macOS 26 or later.
 
 **Older versions**
 
-- TODO
 - [2.23.0](https://github.com/sindresorhus/Gifski/releases/download/v2.23.0/Gifski.2.23.0.-.macOS.13.zip) for macOS 13+
 - [2.22.3](https://github.com/sindresorhus/Gifski/releases/download/v2.22.3/Gifski.2.22.3.-.macOS.12.zip) for macOS 12+
 - [2.21.2](https://github.com/sindresorhus/Gifski/releases/download/v2.21.2/Gifski.2.21.2.-.macOS.11.zip) for macOS 11+
@@ -37,7 +36,7 @@ Requires macOS 26 or later.
 
 A special version for users that cannot access the App Store. It won't receive automatic updates. I will update it here once a year.
 
-[Download]() *(3.0.0 · macOS 26+)*
+[Download](https://www.dropbox.com/scl/fi/2i6entp1fj83zb16al3yf/Gifski-3.0.0-1777056640.zip?rlkey=ealuyayatxef5g61yl9240eyc&raw=1) *(3.0.0 · macOS 26+)*
 
 ## Features
 
