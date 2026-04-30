@@ -587,12 +587,14 @@ private struct DimensionsSetting: View {
 				HStack {
 					switch dimensionsType {
 					case .pixels:
-						let textFieldWidth = 44.0
+						let textFieldWidth = 50.0
+						let textFieldFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
 						HStack(spacing: 4) {
 							LabeledContent("Width") {
 								IntTextField(
 									value: $width,
 									minMax: resizableDimensions.widthMinMax.toInt,
+									font: textFieldFont,
 									onBlur: { _ in // swiftlint:disable:this trailing_closure
 										DispatchQueue.main.async {
 											applyWidth()
@@ -623,6 +625,7 @@ private struct DimensionsSetting: View {
 								IntTextField(
 									value: $height,
 									minMax: resizableDimensions.heightMinMax.toInt,
+									font: textFieldFont,
 									onBlur: { _ in // swiftlint:disable:this trailing_closure
 										DispatchQueue.main.async {
 											applyHeight()
@@ -644,6 +647,7 @@ private struct DimensionsSetting: View {
 							IntTextField(
 								value: $percent,
 								minMax: resizableDimensions.percentMinMax.toInt,
+								font: .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
 								onBlur: { _ in // swiftlint:disable:this trailing_closure
 									DispatchQueue.main.async { // Ensures it uses updated values.
 										applyPercent()

@@ -19,7 +19,6 @@ struct AppMain: App {
 //		.windowBackgroundDragBehavior(.enabled) // Does not work. (macOS 15.2)
 		.defaultPosition(.center)
 		.restorationBehavior(.disabled)
-		.handlesExternalEvents(matching: []) // Makes sure it does not open a new window when dragging files onto the Dock icon.
 		.commands {
 			CommandGroup(replacing: .newItem) {
 				Button("Open…", systemImage: "arrow.up.forward.square") {
