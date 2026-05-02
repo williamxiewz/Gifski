@@ -36,7 +36,7 @@ Requires macOS 26 or later.
 
 A special version for users that cannot access the App Store. It won't receive automatic updates. I will update it here once a year.
 
-[Download](https://www.dropbox.com/scl/fi/2i6entp1fj83zb16al3yf/Gifski-3.0.0-1777056640.zip?rlkey=ealuyayatxef5g61yl9240eyc&raw=1) *(3.0.0 · macOS 26+)*
+[Download](https://www.dropbox.com/scl/fi/sz7f7zr673ii0kbm32v53/Gifski-3.0.1-1777713407.zip?rlkey=j6y2ehotb5ngbjbceg8qs8m1t&raw=1) *(3.0.1 · macOS 26+)*
 
 ## Features
 
