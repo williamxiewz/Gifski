@@ -19,6 +19,7 @@ final class EstimatedFileSizeModel {
 	private var durationTask: Task<Void, Never>?
 	private var estimateRequestID = 0
 	private var fileSizeEstimateCalibration = FileSizeEstimateCalibration()
+	private var isCancelled = false
 
 	private func formattedCalibratedNaiveEstimate(fromNaiveBytes naiveBytes: Double) -> String {
 		formattedFileSize(fileSizeEstimateCalibration.calibratedBytes(fromNaiveBytes: naiveBytes))
@@ -29,6 +30,10 @@ final class EstimatedFileSizeModel {
 	}
 
 	private func _estimateFileSize() {
+		guard !isCancelled else {
+			return
+		}
+
 		// Cancel any previous tasks to prevent stale results from overwriting newer ones.
 		estimationTask?.cancel()
 		durationTask?.cancel()
@@ -100,7 +105,20 @@ final class EstimatedFileSizeModel {
 	}
 
 	func updateEstimate() {
+		isCancelled = false
 		Debouncer.debounce(delay: .seconds(0.5), action: _estimateFileSize)
+	}
+
+	func cancel() async {
+		isCancelled = true
+		let estimationTask = estimationTask
+		let durationTask = durationTask
+		estimationTask?.cancel()
+		durationTask?.cancel()
+		estimateRequestID += 1
+		gifski = nil
+		_ = await durationTask?.result
+		_ = await estimationTask?.result
 	}
 
 	private func getNaiveEstimateBytes() async -> Double {

@@ -15,10 +15,15 @@ actor FullPreviewStream {
 	Incremented on every new request.
 	*/
 	private var automaticRequestID = 0
+	private var minimumRequestID = 0
 
 	private func newID() -> Int {
 		automaticRequestID += 1
 		return automaticRequestID
+	}
+
+	private func canAcceptRequest(_ requestID: Int) -> Bool {
+		requestID >= minimumRequestID
 	}
 
 	let eventStream: AsyncStream<FullPreviewGenerationEvent>
@@ -46,11 +51,15 @@ actor FullPreviewStream {
 	*/
 	func requestNewFullPreview(
 		asset: sending AVAsset,
-		settingsEvent newSettings: SettingsForFullPreview
+		settingsEvent newSettings: SettingsForFullPreview,
+		requestID: Int
 	) async {
-		let requestID = newID()
+		automaticRequestID = max(automaticRequestID, requestID)
 
-		guard state.isNecessaryToCreateNewFullPreview(newSettings: newSettings, newRequestID: requestID) else {
+		guard
+			canAcceptRequest(requestID),
+			state.isNecessaryToCreateNewFullPreview(newSettings: newSettings, newRequestID: requestID)
+		else {
 			// Not necessary to create a new full preview since there is no state change.
 			return
 		}
@@ -65,6 +74,10 @@ actor FullPreviewStream {
 
 		generationTask = .detached(priority: .medium) {
 			do {
+				guard await self.canAcceptRequest(requestID) else {
+					return
+				}
+
 				await self.updatePreview(
 					newPreviewState: .generating(
 						settings: newSettings,
@@ -93,6 +106,9 @@ actor FullPreviewStream {
 				let textures = try await fullPreviewTask.value
 
 				try Task.checkCancellation()
+				guard await self.canAcceptRequest(requestID) else {
+					return
+				}
 
 				await self.updatePreview(newPreviewState: .ready(settings: newSettings, gifData: textures, requestID: requestID))
 			} catch {
@@ -120,14 +136,22 @@ actor FullPreviewStream {
 
 	Monitor `eventStream` for `.cancelled` events.
 	*/
-	func cancelFullPreviewGeneration() {
-		generationTask?.cancel()
+	func cancelFullPreviewGeneration(invalidatingThrough requestID: Int? = nil) async {
+		if let requestID {
+			automaticRequestID = max(automaticRequestID, requestID)
+			minimumRequestID = max(minimumRequestID, requestID + 1)
+		}
 
-		guard state.isGenerating else {
+		if state.canShowPreview {
+			updatePreview(newPreviewState: .cancelled(requestID: newID()))
+		}
+
+		guard let generationTask else {
 			return
 		}
 
-		updatePreview(newPreviewState: .cancelled(requestID: newID()))
+		generationTask.cancel()
+		_ = await generationTask.result
 	}
 
 	private func updatePreview(newPreviewState: FullPreviewGenerationEvent) {

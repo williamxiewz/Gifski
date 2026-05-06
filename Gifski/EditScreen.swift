@@ -56,6 +56,8 @@ private struct _EditScreen: View {
 	@State private var shouldShow = false
 	@State private var fullPreviewState = FullPreviewGenerationEvent.initialState
 	@State private var fullPreviewDebouncer = Debouncer(delay: .milliseconds(200))
+	@State private var isPreparingConversion = false
+	@State private var backgroundWorkRequestID = 0
 
 	@Binding private var outputCropRect: CropRect
 	@State private var savedCropRect: CropRect?
@@ -150,20 +152,17 @@ private struct _EditScreen: View {
 		}
 		.onChange(of: outputQuality, initial: true) {
 			estimatedFileSizeModel.duration = metadata.duration
-			estimatedFileSizeModel.updateEstimate()
-			updatePreviewOnSettingsChange()
+			updateBackgroundWorkOnSettingsChange()
 		}
 		// TODO: Make these a single call when tuples are equatable.
 		.onChange(of: resizableDimensions) {
-			estimatedFileSizeModel.updateEstimate()
-			updatePreviewOnSettingsChange()
+			updateBackgroundWorkOnSettingsChange()
 		}
 		.onChange(of: timeRange) {
-			estimatedFileSizeModel.updateEstimate()
-			updatePreviewOnSettingsChange()
+			updateBackgroundWorkOnSettingsChange()
 		}
 		.onChange(of: bounceGIF) {
-			estimatedFileSizeModel.updateEstimate()
+			updateEstimatedFileSize()
 
 			guard bounceGIF else {
 				return
@@ -172,8 +171,7 @@ private struct _EditScreen: View {
 			showKeyframeRateWarningIfNeeded()
 		}
 		.onChange(of: frameRate) {
-			estimatedFileSizeModel.updateEstimate()
-			updatePreviewOnSettingsChange()
+			updateBackgroundWorkOnSettingsChange()
 		}
 		.onChange(of: loopDelay) {
 			updatePreviewOnSettingsChange()
@@ -276,13 +274,55 @@ private struct _EditScreen: View {
 		)
 	}
 
-	private func updatePreviewOnSettingsChange() {
-		guard appState.mode != .editCrop else {
+	private var canRunBackgroundWork: Bool {
+		appState.isOnEditScreen && !isPreparingConversion
+	}
+
+	private var canGenerateFullPreview: Bool {
+		appState.shouldShowPreview && canRunBackgroundWork
+	}
+
+	private func updateEstimatedFileSize() {
+		guard canRunBackgroundWork else {
+			Task {
+				await estimatedFileSizeModel.cancel()
+			}
 			return
 		}
 
+		estimatedFileSizeModel.updateEstimate()
+	}
+
+	private func updateBackgroundWorkOnSettingsChange() {
+		updateEstimatedFileSize()
+		updatePreviewOnSettingsChange()
+	}
+
+	private func nextBackgroundWorkRequestID() -> Int {
+		backgroundWorkRequestID += 1
+		return backgroundWorkRequestID
+	}
+
+	private func updatePreviewOnSettingsChange() {
+		guard canGenerateFullPreview else {
+			Task {
+				await fullPreviewStream.cancelFullPreviewGeneration()
+			}
+			return
+		}
+
+		let requestID = nextBackgroundWorkRequestID()
+
 		fullPreviewDebouncer {
 			Task {
+				guard
+					canGenerateFullPreview,
+					backgroundWorkRequestID == requestID
+				else {
+					await fullPreviewStream.cancelFullPreviewGeneration()
+					return
+				}
+
 				let conversion = conversionSettings
 
 				await fullPreviewStream.requestNewFullPreview(
@@ -292,7 +332,8 @@ private struct _EditScreen: View {
 						speed: Defaults[.outputSpeed],
 						framesPerSecondsWithoutSpeedAdjustment: Defaults[.outputFPS],
 						duration: metadata.duration.toTimeInterval
-					)
+					),
+					requestID: requestID
 				)
 			}
 		}
@@ -310,8 +351,7 @@ private struct _EditScreen: View {
 			modifiedAsset = try await PreviewableComposition(extractPreviewableCompositionFrom: changedSpeedAsset)
 			modifiedAssetTimeRange = try await changedSpeedAsset.firstVideoTrack?.load(.timeRange)
 
-			estimatedFileSizeModel.updateEstimate()
-			updatePreviewOnSettingsChange()
+			updateBackgroundWorkOnSettingsChange()
 		} catch {
 			appState.error = error
 		}
@@ -348,8 +388,7 @@ private struct _EditScreen: View {
 				}
 
 				self.timeRange = timeRange
-				estimatedFileSizeModel.updateEstimate()
-				updatePreviewOnSettingsChange()
+				updateBackgroundWorkOnSettingsChange()
 			}
 		}
 		.onChange(of: appState.mode) {
@@ -412,7 +451,7 @@ private struct _EditScreen: View {
 				}
 			}
 			.keyboardShortcut(.defaultAction)
-			.disabled(!hasEnoughFrames)
+			.disabled(!hasEnoughFrames || isPreparingConversion)
 			.padding(.top, -1) // Makes the bar have equal spacing on top and bottom.
 		}
 		.overlay {
@@ -434,7 +473,24 @@ private struct _EditScreen: View {
 	}
 
 	private func convert() {
-		appState.navigationPath.append(.conversion(conversionSettings))
+		guard !isPreparingConversion else {
+			return
+		}
+
+		let conversion = conversionSettings
+		isPreparingConversion = true
+		let blockingRequestID = nextBackgroundWorkRequestID()
+
+		Task {
+			await estimatedFileSizeModel.cancel()
+			await fullPreviewStream.cancelFullPreviewGeneration(invalidatingThrough: blockingRequestID)
+			isPreparingConversion = false
+			guard appState.isOnEditScreen else {
+				return
+			}
+
+			appState.navigationPath.append(.conversion(conversion))
+		}
 	}
 
 	private var conversionSettings: GIFGenerator.Conversion {
