@@ -8,17 +8,17 @@ When creating a full preview, you don't need some settings such as loop or bounc
 struct SettingsForFullPreview: Equatable, Sendable {
 	let conversion: SendableConversion
 	let speed: Double
-	let assetDuration: TimeInterval
-	let framesPerSecondsWithoutSpeedAdjustment: Int
+	let assetDuration: Duration
+	let frameRate: Int
 
 	init(
 		conversion: GIFGenerator.Conversion,
 		speed: Double,
-		framesPerSecondsWithoutSpeedAdjustment: Int,
-		duration assetDuration: TimeInterval
+		frameRate: Int,
+		assetDuration: Duration
 	) {
 		self.speed = speed
-		self.framesPerSecondsWithoutSpeedAdjustment = framesPerSecondsWithoutSpeedAdjustment
+		self.frameRate = frameRate
 		self.assetDuration = assetDuration
 		self.conversion = SendableConversion(conversion: conversion)
 	}
@@ -29,10 +29,6 @@ struct SettingsForFullPreview: Equatable, Sendable {
 		oldRequestID: Int,
 		newRequestID: Int
 	) -> Bool {
-		guard speed == newSettings.speed else {
-			return true
-		}
-
 		if self == newSettings {
 			newRequestID.p("Skipping - Same as \(oldRequestID)")
 			return false
@@ -40,9 +36,10 @@ struct SettingsForFullPreview: Equatable, Sendable {
 
 		if
 			!areCurrentlyGenerating,
-			areTheSameBesidesTimeRange(newSettings),
+			hasSameReusablePreviewInputs(as: newSettings),
 			timeRangeContainsTimeRange(of: newSettings)
 		{
+			// A completed preview for a wider time range can be reused by indexing into the already generated frame list.
 			newRequestID.p("Skipping - Same as ready \(oldRequestID)")
 			return false
 		}
@@ -55,8 +52,8 @@ struct SettingsForFullPreview: Equatable, Sendable {
 	/**
 	Check if the settings for full preview are the same, ignoring settings that do not affect full preview.
 	*/
-	private func areTheSameBesidesTimeRange(_ settings: Self) -> Bool {
-		conversion.settings == settings.conversion.settings
+	private func hasSameReusablePreviewInputs(as other: Self) -> Bool {
+		speed == other.speed && conversion.settings == other.conversion.settings && assetDuration == other.assetDuration && frameRate == other.frameRate
 	}
 
 	/**
@@ -65,7 +62,7 @@ struct SettingsForFullPreview: Equatable, Sendable {
 	private func timeRangeContainsTimeRange(of newSettings: Self) -> Bool {
 		guard let oldTimeRange = conversion.timeRange else {
 			/**
-			`nil` means the entire duration, so all sets are subset of the range.
+			`nil` means the entire duration, so every trimmed range is a subset of the old preview.
 			*/
 			return true
 		}
@@ -99,7 +96,6 @@ struct SettingsForFullPreview: Equatable, Sendable {
 			let sourceURL: URL
 			let quality: Double
 			let dimensions: (width: Int, height: Int)?
-			let frameRate: Int?
 			let crop: CropRect?
 			let trackPreferredTransform: CGAffineTransform?
 
@@ -119,20 +115,22 @@ struct SettingsForFullPreview: Equatable, Sendable {
 				sourceURL: conversion.sourceURL,
 				quality: conversion.quality,
 				dimensions: conversion.dimensions,
-				frameRate: conversion.frameRate,
 				crop: conversion.crop,
 				trackPreferredTransform: conversion.trackPreferredTransform
 			)
 		}
 
-		func toConversion(asset: AVAsset) -> GIFGenerator.Conversion {
+		func toConversion(
+			asset: AVAsset,
+			frameRate: Int
+		) -> GIFGenerator.Conversion {
 			.init(
 				asset: asset,
 				sourceURL: settings.sourceURL,
 				timeRange: timeRange,
 				quality: settings.quality,
 				dimensions: settings.dimensions,
-				frameRate: settings.frameRate,
+				frameRate: frameRate,
 				loop: settings.loop,
 				bounce: settings.bounce,
 				crop: settings.crop,

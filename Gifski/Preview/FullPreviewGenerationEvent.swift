@@ -3,7 +3,7 @@ import AVFoundation
 import Metal
 
 /**
-Events that will be emitted by `PreviewStream`, which represent the state or a generation request.
+Events emitted by `FullPreviewStream`, which represent the preview state or a generation request.
 */
 struct FullPreviewGenerationEvent: Equatable, Sendable {
 	let requestID: Int
@@ -62,7 +62,7 @@ extension FullPreviewGenerationEvent {
 		case .generating(let generating):
 			try await originalFrame.convertToGIF(settings: generating.settings).convertToTexture()
 		case .ready(let fullPreview):
-			try fullPreview.getGIF(at: compositionTime)
+			try fullPreview.gif(at: compositionTime)
 		}
 	}
 
@@ -178,36 +178,26 @@ extension FullPreviewGenerationEvent.FullPreview {
 		case failedToGetGIFFrame
 	}
 
-	func getGIF(at compositionTime: CMTime) throws(Error) -> SendableTexture {
-		guard let image = gifData[getCurrentGIFIndex(at: compositionTime)] else {
+	func gif(at compositionTime: CMTime) throws(Error) -> SendableTexture {
+		guard !gifData.isEmpty else {
+			throw .failedToGetGIFFrame
+		}
+
+		guard let image = gifData[currentGIFIndex(at: compositionTime)] else {
 			throw .failedToGetGIFFrame
 		}
 
 		return image
 	}
 
-	private func getCurrentGIFIndex(at compositionTime: CMTime) -> Int {
-		guard !gifData.isEmpty else {
-			assertionFailure("gifData should not be empty when getting GIF index")
-			return 0
-		}
+	private func currentGIFIndex(at compositionTime: CMTime) -> Int {
+		let timeRange = settings.conversion.timeRange ?? (0...settings.assetDuration.toTimeInterval)
+		// `compositionTime` is already in the speed-adjusted preview asset timeline, so do not multiply it by the output speed here.
+		let gifTime = compositionTime.seconds - timeRange.lowerBound
+		let framesPerSecond = Double(settings.frameRate)
 
-		let timeRangeInOriginalSpeed = settings.conversion.timeRange ?? (0...settings.assetDuration)
-
-		let gifTimeInOriginalSpeed = originalCompositionTime(from: compositionTime) - timeRangeInOriginalSpeed.lowerBound
-		let adjustedFramesPerSecond = Double(settings.framesPerSecondsWithoutSpeedAdjustment) / settings.speed
-
-		return Int(floor(gifTimeInOriginalSpeed * adjustedFramesPerSecond))
+		return Int(floor(gifTime * framesPerSecond))
 			.clamped(from: 0, to: gifData.count - 1)
-	}
-
-	/**
-	Time that has been scaled.
-
-	The composition will speed up or slow down the time. For example, if the player is at 2x speed. This struct takes the reported time of 0.5 and multiplies it by 2, to get 1 second of the original time in the composition.
-	*/
-	private func originalCompositionTime(from reportedCompositionTime: CMTime) -> Double {
-		reportedCompositionTime.seconds * settings.speed
 	}
 }
 

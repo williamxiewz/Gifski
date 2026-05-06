@@ -1,5 +1,5 @@
 import Foundation
-import AVKit
+import AVFoundation
 import SwiftUI
 
 struct ExportModifiedVideoView: View {
@@ -52,10 +52,10 @@ struct ExportModifiedVideoView: View {
 			get: {
 				guard
 					!isAudioWarningPresented,
-					case let .exporting(_, videoIsOverTwentySeconds) = state else {
+					case let .exporting(_, shouldShowProgressSheet) = state else {
 					return false
 				}
-				return videoIsOverTwentySeconds
+				return shouldShowProgressSheet
 			},
 			set: {
 				guard
@@ -78,7 +78,7 @@ struct ExportModifiedVideoView: View {
 					case let .finished(url) = state else {
 					return
 				}
-				try? FileManager.default.removeItem(at: url)
+				try? url.delete()
 				state = .idle
 			}
 		)
@@ -104,7 +104,7 @@ struct ExportModifiedVideoView: View {
 
 enum ExportModifiedVideoState {
 	case idle
-	case exporting(Task<Void, Never>, videoIsOverTwentySeconds: Bool)
+	case exporting(Task<Void, Never>, shouldShowProgressSheet: Bool)
 	case finished(URL)
 }
 
@@ -114,8 +114,8 @@ extension ExportModifiedVideoState: Equatable {
 		case (.idle, .idle):
 			true
 		// Intentionally ignores Task identity - we only care about the exporting state, not which specific task.
-		case (.exporting(_, let lhsVideoIsOverTwentySeconds), .exporting(_, let rhsVideoIsOverTwentySeconds)):
-			lhsVideoIsOverTwentySeconds == rhsVideoIsOverTwentySeconds
+		case (.exporting(_, let lhsShouldShowProgressSheet), .exporting(_, let rhsShouldShowProgressSheet)):
+			lhsShouldShowProgressSheet == rhsShouldShowProgressSheet
 		case (.finished(let lhsURL), .finished(let rhsURL)):
 			lhsURL == rhsURL
 		default:
@@ -142,6 +142,23 @@ extension ExportModifiedVideoState {
 			false
 		}
 	}
+
+	/**
+	Update progress sheet visibility if the state is currently exporting.
+	- Returns: Whether the state is still exporting.
+	*/
+	mutating func updateProgressSheetVisibility(_ shouldShowProgressSheet: Bool) -> Bool {
+		guard case let .exporting(task, _) = self else {
+			return false
+		}
+
+		self = .exporting(
+			task,
+			shouldShowProgressSheet: shouldShowProgressSheet
+		)
+
+		return true
+	}
 }
 
 /**
@@ -149,14 +166,15 @@ Convert a source video to an `.mp4` using the same scale, speed, and crop as the
 - Returns: Temporary URL of the exported video.
 */
 func exportModifiedVideo(conversion: GIFGenerator.Conversion) async throws -> URL {
-	let (composition, compositionVideoTrack) = try await createComposition(
+	let (composition, compositionVideoTrack, sourceVideoTrack) = try await createComposition(
 		conversion: conversion
 	)
 	let videoComposition = try await createVideoComposition(
 		compositionVideoTrack: compositionVideoTrack,
+		sourceVideoTrack: sourceVideoTrack,
 		conversion: conversion
 	)
-	let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent( "\(UUID().uuidString).mp4")
+	let outputURL = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
 
 	let presets = AVAssetExportSession.allExportPresets()
 	guard presets.contains(AVAssetExportPresetHighestQuality) else {
@@ -180,7 +198,7 @@ Creates the mutable composition along with the video track inserted.
 */
 private func createComposition(
 	conversion: GIFGenerator.Conversion
-) async throws -> (AVMutableComposition, AVMutableCompositionTrack) {
+) async throws -> (composition: AVMutableComposition, compositionVideoTrack: AVMutableCompositionTrack, sourceVideoTrack: AVAssetTrack) {
 	let composition = AVMutableComposition()
 
 	guard let compositionTrack = composition.addMutableTrack(
@@ -195,10 +213,15 @@ private func createComposition(
 		of: videoTrack,
 		at: .zero
 	)
-	if let preferredTransform = conversion.trackPreferredTransform {
-		compositionTrack.preferredTransform = preferredTransform
+	let preferredTransform: CGAffineTransform
+	if let trackPreferredTransform = conversion.trackPreferredTransform {
+		preferredTransform = trackPreferredTransform
+	} else {
+		preferredTransform = try await videoTrack.load(.preferredTransform)
 	}
-	return (composition, compositionTrack)
+	compositionTrack.preferredTransform = preferredTransform
+	// Return the source track too because composition tracks do not reliably carry the natural-size geometry needed by the shared crop/scale code.
+	return (composition, compositionTrack, videoTrack)
 }
 
 /**
@@ -206,41 +229,19 @@ Create an `AVVideoComposition` that will scale, translate, and crop the `composi
 */
 private func createVideoComposition(
 	compositionVideoTrack: AVMutableCompositionTrack,
+	sourceVideoTrack: AVAssetTrack,
 	conversion: GIFGenerator.Conversion
 ) async throws -> AVVideoComposition {
-	let renderSize = try await conversion.exportModifiedRenderRect.size
 	let frameDuration = try await compositionVideoTrack.load(.minFrameDuration)
 
 	// The instruction time range must be greater than or equal to the video and there is no penalty for making it longer, so add 1.0 second to the duration just to be safe
 	let timeRange = CMTimeRange(start: .zero, duration: .init(seconds: try await conversion.videoWithoutBounceDuration.toTimeInterval + 1.0, preferredTimescale: .video))
-
-	// Layer instructions operate in natural space (unrotated). The crop rect from UI is in
-	// preferred space, so `cropRectAppliedToNaturalSize` transforms it back to natural space.
-	let cropRectAppliedToNaturalSize = try await conversion.cropRectAppliedToNaturalSize
-	let preferredTransform = conversion.trackPreferredTransform ?? .identity
-	let scaleTransform = CGAffineTransform(scaledBy: try await conversion.scale)
-	let scaledCropRect = cropRectAppliedToNaturalSize.applying(scaleTransform)
-	let cropRectAfterPreferred = scaledCropRect.applying(preferredTransform)
-
-	// Place the crop rect in the top left corner.
-	let translateTransform = CGAffineTransform(translationX: -cropRectAfterPreferred.minX, y: -cropRectAfterPreferred.minY)
-
-	var layerConfig = AVVideoCompositionLayerInstruction.Configuration(assetTrack: compositionVideoTrack)
-	layerConfig.setCropRectangle(cropRectAppliedToNaturalSize, at: .zero)
-	layerConfig.setTransform(scaleTransform.concatenating(preferredTransform).concatenating(translateTransform), at: .zero)
-
-	let instructionConfig = AVVideoCompositionInstruction.Configuration(
-		layerInstructions: [AVVideoCompositionLayerInstruction(configuration: layerConfig)],
-		timeRange: timeRange
+	return try await conversion.videoComposition(
+		for: compositionVideoTrack,
+		usingGeometryOf: sourceVideoTrack,
+		timeRange: timeRange,
+		frameDuration: frameDuration
 	)
-
-	let config = AVVideoComposition.Configuration(
-		frameDuration: frameDuration,
-		instructions: [AVVideoCompositionInstruction(configuration: instructionConfig)],
-		renderSize: renderSize
-	)
-
-	return AVVideoComposition(configuration: config)
 }
 
 private struct ExportableMP4: Transferable {

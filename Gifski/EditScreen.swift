@@ -171,6 +171,11 @@ private struct _EditScreen: View {
 			showKeyframeRateWarningIfNeeded()
 		}
 		.onChange(of: frameRate) {
+			// Speed changes rebuild `modifiedAsset` asynchronously. If the FPS control clamps while that rebuild is pending, wait for `applySpeed` to refresh background work from the new asset timeline.
+			guard lastSpeed == Defaults[.outputSpeed] else {
+				return
+			}
+
 			updateBackgroundWorkOnSettingsChange()
 		}
 		.onChange(of: loopDelay) {
@@ -188,7 +193,7 @@ private struct _EditScreen: View {
 			isPresented: $isLargeGIFWarningPresented
 		) {
 			Button("Convert Anyway") {
-				convert()
+				convert(skipLargeGIFWarning: true)
 			}
 			Button(role: .cancel) {}
 		}
@@ -207,7 +212,7 @@ private struct _EditScreen: View {
 			case .exporting(let task, _):
 				task.cancel()
 			case .finished(let url):
-				try? FileManager.default.removeItem(at: url)
+				try? url.delete()
 			}
 		}
 		.task {
@@ -241,7 +246,7 @@ private struct _EditScreen: View {
 		case .idle:
 			break
 		case .exporting, .finished:
-			// If another alert (like bounce warning) occurs when you activate this callback, the `fileExporter` modifier won't show and the state will be stuck on `.finished`. By reassigning the state this will force a swiftUI draw and bring up the file exporter.
+			// If another alert (like bounce warning) occurs when you activate this callback, the `fileExporter` modifier won't show and the state will be stuck on `.finished`. By reassigning the state this will force a SwiftUI draw and bring up the file exporter.
 			exportModifiedVideoState = exportModifiedVideoState
 			return
 		}
@@ -255,6 +260,19 @@ private struct _EditScreen: View {
 		exportModifiedVideoState = .exporting(
 			Task {
 				do {
+					let conversionSettings = try await prepareConversionSettings(updateBackgroundWork: true)
+
+					let shouldExport = await MainActor.run {
+						exportModifiedVideoState.updateProgressSheetVisibility(
+							conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange, withBounce: false) > .seconds(20)
+						)
+					}
+					guard shouldExport else {
+						return
+					}
+
+					try Task.checkCancellation()
+
 					let outputURL = try await exportModifiedVideo(conversion: conversionSettings)
 					try await MainActor.run {
 						try Task.checkCancellation()
@@ -270,7 +288,7 @@ private struct _EditScreen: View {
 					}
 				}
 			},
-			videoIsOverTwentySeconds: conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange, withBounce: false) > .seconds(20)
+			shouldShowProgressSheet: false
 		)
 	}
 
@@ -324,14 +342,15 @@ private struct _EditScreen: View {
 				}
 
 				let conversion = conversionSettings
+				let assetDuration = modifiedAssetTimeRange.map { Duration.seconds($0.duration.seconds) } ?? metadata.duration
 
 				await fullPreviewStream.requestNewFullPreview(
 					asset: conversion.asset,
-					settingsEvent: .init(
+					settings: .init(
 						conversion: conversion,
 						speed: Defaults[.outputSpeed],
-						framesPerSecondsWithoutSpeedAdjustment: Defaults[.outputFPS],
-						duration: metadata.duration.toTimeInterval
+						frameRate: effectiveFrameRate,
+						assetDuration: assetDuration
 					),
 					requestID: requestID
 				)
@@ -341,20 +360,105 @@ private struct _EditScreen: View {
 
 	private func setSpeed() async {
 		do {
-			if Defaults[.outputSpeed] == lastSpeed {
+			try await applySelectedSpeed()
+		} catch {
+			guard !error.isCancelled else {
 				return
 			}
-			lastSpeed = Defaults[.outputSpeed]
-			// We could have set the `rate` of the player instead of modifying the asset, but it's just easier to modify the asset as then it matches what we want to generate. Otherwise, we would have to translate trimming ranges to the correct speed, etc.
 
-			let changedSpeedAsset = try await asset.firstVideoTrack?.extractToNewAssetAndChangeSpeed(to: Defaults[.outputSpeed]) ?? modifiedAsset
-			modifiedAsset = try await PreviewableComposition(extractPreviewableCompositionFrom: changedSpeedAsset)
-			modifiedAssetTimeRange = try await changedSpeedAsset.firstVideoTrack?.load(.timeRange)
-
-			updateBackgroundWorkOnSettingsChange()
-		} catch {
 			appState.error = error
 		}
+	}
+
+	/**
+	Applies the latest selected speed. If the user changes speed while AVFoundation work is in flight, retry with the new value instead of applying stale settings.
+	*/
+	private func applySelectedSpeed(updateBackgroundWork: Bool = true) async throws {
+		while true {
+			let speed = Defaults[.outputSpeed]
+
+			do {
+				if try await applySpeed(speed, updateBackgroundWork: updateBackgroundWork) {
+					return
+				}
+			} catch {
+				guard speed != Defaults[.outputSpeed] else {
+					throw error
+				}
+			}
+
+			try Task.checkCancellation()
+		}
+	}
+
+	@discardableResult
+	private func applySpeed(
+		_ speed: Double,
+		updateBackgroundWork: Bool = true
+	) async throws -> Bool {
+		if speed == lastSpeed {
+			return true
+		}
+
+		// The player may not have reported the current modified asset range yet, for example with a persisted non-1x speed. Load it here so immediate convert/export can still translate trim state correctly.
+		let oldModifiedAssetTimeRange: CMTimeRange? = if let modifiedAssetTimeRange {
+			modifiedAssetTimeRange
+		} else {
+			try await modifiedAsset.firstVideoTrack?.load(.timeRange)
+		}
+
+		// Keep the preview and final conversion on the same normalized asset so trim ranges stay in one timeline.
+		let speedAdjustedAsset: AVAsset
+		if speed == 1.0 {
+			speedAdjustedAsset = asset
+		} else {
+			guard
+				let firstVideoTrack = try await asset.firstVideoTrack,
+				let extractedAsset = try await firstVideoTrack.extractToNewAssetAndChangeSpeed(to: speed)
+			else {
+				throw GIFGenerator.Error.unreadableFile
+			}
+
+			speedAdjustedAsset = extractedAsset
+		}
+
+		let modifiedAsset = try await PreviewableComposition(extractPreviewableCompositionFrom: speedAdjustedAsset)
+		let modifiedAssetTimeRange = try await modifiedAsset.firstVideoTrack?.load(.timeRange)
+		let timeRange = translatedTimeRange(from: oldModifiedAssetTimeRange, to: modifiedAssetTimeRange)
+
+		// A newer speed request may have started while this one was extracting. Do not let stale AVFoundation work overwrite the current UI state.
+		guard speed == Defaults[.outputSpeed] else {
+			return false
+		}
+
+		try Task.checkCancellation()
+
+		self.modifiedAsset = modifiedAsset
+		self.modifiedAssetTimeRange = modifiedAssetTimeRange
+		self.timeRange = timeRange
+		lastSpeed = speed
+
+		if updateBackgroundWork {
+			updateBackgroundWorkOnSettingsChange()
+		}
+
+		return true
+	}
+
+	private func translatedTimeRange(
+		from oldTimeRange: CMTimeRange?,
+		to newTimeRange: CMTimeRange?
+	) -> ClosedRange<Double>? {
+		guard
+			let timeRange,
+			let oldRange = oldTimeRange?.range,
+			let newRange = newTimeRange?.range
+		else {
+			return timeRange
+		}
+
+		// Keep the SwiftUI trim state in the same timeline as `modifiedAsset` so immediate convert/export after a speed change does not depend on the player callback winning the race.
+		return timeRange.translated(from: oldRange, to: newRange)
 	}
 
 	private func setUp() {
@@ -440,15 +544,7 @@ private struct _EditScreen: View {
 		HStack {
 			Spacer()
 			Button("Convert") {
-				if
-					!suppressLargeGIFWarning,
-					resizableDimensions.pixels.longestSide >= 1200,
-					conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange) > .seconds(5)
-				{
-					isLargeGIFWarningPresented = true
-				} else {
-					convert()
-				}
+				convert()
 			}
 			.keyboardShortcut(.defaultAction)
 			.disabled(!hasEnoughFrames || isPreparingConversion)
@@ -469,28 +565,62 @@ private struct _EditScreen: View {
 
 	private var hasEnoughFrames: Bool {
 		let duration = conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange, withBounce: false)
-		return Int(duration.toTimeInterval * Double(frameRate)) >= 2
+		return Int(duration.toTimeInterval * Double(effectiveFrameRate)) >= 2
 	}
 
-	private func convert() {
+	private func convert(skipLargeGIFWarning: Bool = false) {
 		guard !isPreparingConversion else {
 			return
 		}
 
-		let conversion = conversionSettings
 		isPreparingConversion = true
-		let blockingRequestID = nextBackgroundWorkRequestID()
 
 		Task {
-			await estimatedFileSizeModel.cancel()
-			await fullPreviewStream.cancelFullPreviewGeneration(invalidatingThrough: blockingRequestID)
-			isPreparingConversion = false
-			guard appState.isOnEditScreen else {
-				return
+			defer {
+				isPreparingConversion = false
 			}
 
-			appState.navigationPath.append(.conversion(conversion))
+			do {
+				let conversion = try await prepareConversionSettings()
+
+				guard appState.isOnEditScreen else {
+					return
+				}
+
+				if
+					!skipLargeGIFWarning,
+					!suppressLargeGIFWarning,
+					resizableDimensions.pixels.longestSide >= 1200,
+					conversion.gifDuration(assetTimeRange: modifiedAssetTimeRange) > .seconds(5)
+				{
+					isPreparingConversion = false
+					isLargeGIFWarningPresented = true
+					updateBackgroundWorkOnSettingsChange()
+					return
+				}
+
+				let blockingRequestID = nextBackgroundWorkRequestID()
+
+				await estimatedFileSizeModel.cancel()
+				await fullPreviewStream.cancelFullPreviewGeneration(invalidatingThrough: blockingRequestID)
+
+				guard appState.isOnEditScreen else {
+					return
+				}
+
+				appState.navigationPath.append(.conversion(conversion))
+			} catch {
+				appState.error = error
+			}
 		}
+	}
+
+	/**
+	Applies the selected speed before returning conversion settings.
+	*/
+	private func prepareConversionSettings(updateBackgroundWork: Bool = false) async throws -> GIFGenerator.Conversion {
+		try await applySelectedSpeed(updateBackgroundWork: updateBackgroundWork)
+		return conversionSettings
 	}
 
 	private var conversionSettings: GIFGenerator.Conversion {
@@ -500,7 +630,7 @@ private struct _EditScreen: View {
 			timeRange: timeRange,
 			quality: outputQuality,
 			dimensions: resizableDimensions.pixels.toInt,
-			frameRate: frameRate,
+			frameRate: effectiveFrameRate,
 			loop: {
 				guard loopGIF else {
 					return loopCount == 0 ? .never : .count(loopCount)
@@ -510,9 +640,15 @@ private struct _EditScreen: View {
 			}(),
 			bounce: bounceGIF,
 			loopDelay: Defaults[.loopDelay],
-			crop: outputCropRect,
+			// `CGImage.cropping(to:)` is expensive for 4K frames, so keep the no-crop path as `nil`.
+			crop: outputCropRect.isReset ? nil : outputCropRect,
 			trackPreferredTransform: metadata.trackPreferredTransform
 		)
+	}
+
+	private var effectiveFrameRate: Int {
+		// Keep conversion and full-preview indexing aligned with the speed-adjusted asset, especially when speed raises the usable FPS above the source track's nominal FPS.
+		frameRate.clamped(to: metadata.frameRate.effectiveFrameRateRange(speed: Defaults[.outputSpeed]))
 	}
 
 	private func showKeyframeRateWarningIfNeeded(maximumKeyframeInterval: Double = 30) {
@@ -947,11 +1083,13 @@ private struct FrameRateSetting: View {
 		.onAppear {
 			frameRate = frameRate.clamped(to: intRange)
 		}
+		.onChange(of: speed) {
+			frameRate = frameRate.clamped(to: intRange)
+		}
 	}
 
 	private var maxFrameRate: Double {
-		// We round it so that `29.970` becomes `30` for practical reasons.
-		(videoFrameRate * speed).rounded().clamped(to: Constants.allowedFrameRate)
+		Double(intRange.upperBound)
 	}
 
 	private var range: ClosedRange<Double> {
@@ -961,11 +1099,20 @@ private struct FrameRateSetting: View {
 		)
 	}
 
-	// TODO: Make extension for this conversion.
+	// Keep this in sync with `effectiveFrameRate`.
 	private var intRange: ClosedRange<Int> {
+		videoFrameRate.effectiveFrameRateRange(speed: speed)
+	}
+}
+
+extension Double {
+	/**
+	The allowed output frame-rate range after applying speed. We round so `29.970` becomes `30` for practical reasons.
+	*/
+	func effectiveFrameRateRange(speed: Double) -> ClosedRange<Int> {
 		.fromGraceful(
 			Int(Constants.allowedFrameRate.lowerBound.rounded()),
-			Int(maxFrameRate.rounded())
+			Int((self * speed).rounded().clamped(to: Constants.allowedFrameRate))
 		)
 	}
 }

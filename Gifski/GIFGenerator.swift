@@ -1,5 +1,6 @@
 import Foundation
-import AVFoundation
+import VideoToolbox
+@preconcurrency import AVFoundation
 
 actor GIFGenerator {
 	private var gifski: Gifski?
@@ -81,31 +82,43 @@ actor GIFGenerator {
 	- Parameters:
 		- conversion: The source information of the conversion.
 		- isEstimation: Whether the frame is part of a size estimation job.
-		- jobKey: The string used to identify the current conversion job.
-		- completionHandler: Closure called when the data conversion completes or an error is encountered.
+		- onProgress: Closure called when conversion progress advances.
 	*/
 	private func generateData(
 		for conversion: Conversion,
 		isEstimation: Bool,
 		onProgress: @escaping (Double) -> Void
 	) async throws -> Data {
-		var (generator, times, frameRate) = try await imageGenerator(for: conversion)
+		let (reader, output, targetFrameTimes, frameRate) = try await makeFrameReader(for: conversion)
+		var frameTimes = targetFrameTimes
 
 		// TODO: The whole estimation thing should be split out into a separate method and the things that are shared should also be split out.
 		if isEstimation {
-			let originalCount = times.count
+			let originalCount = frameTimes.count
 
 			if originalCount > 25 {
-				times = times
-					.chunked(by: 5)
-					.sample(length: 5)
-					.flatten()
+				// Take 25 consecutive middle frames. AVAssetReader reads sequentially, so we cannot sample from spread-out positions like the old AVAssetImageGenerator path. Consecutive sampling can skew estimates for videos with non-uniform motion, but it is accurate enough in practice.
+				let sampleCount = 25
+				let startIndex = (originalCount - sampleCount) / 2
+				frameTimes = Array(frameTimes[startIndex..<(startIndex + sampleCount)])
 			}
 
-			sizeMultiplierForEstimation = times.isEmpty ? 1.0 : Double(originalCount) / Double(times.count)
+			sizeMultiplierForEstimation = frameTimes.isEmpty ? 1.0 : Double(originalCount) / Double(frameTimes.count)
+
+			if
+				let firstFrameTime = frameTimes.first,
+				let lastFrameTime = frameTimes.last,
+				lastFrameTime > firstFrameTime
+			{
+				let endTime = CMTimeAdd(
+					lastFrameTime,
+					CMTime(seconds: 1 / frameRate, preferredTimescale: lastFrameTime.timescale)
+				)
+				reader.timeRange = CMTimeRange(start: firstFrameTime, end: endTime)
+			}
 		}
 
-		let totalFrameCount = totalFrameCount(for: conversion, sourceFrameCount: times.count)
+		let totalFrameCount = totalFrameCount(for: conversion, sourceFrameCount: frameTimes.count)
 
 		var completedFrameCount = 0
 		gifski?.onProgress = {
@@ -114,106 +127,69 @@ actor GIFGenerator {
 		}
 
 		// TODO: Use `Duration`.
-		let startTime = times.first?.seconds ?? 0
+		let startTime = frameTimes.first?.seconds ?? 0
 		let loopDelayOffset = conversion.loop.isLooping ? conversion.loopDelay : 0
 
-		// TODO: Does it handle cancellation?
-
-		var index = 0
-		var previousTime = -Double.infinity // Ensures the first frame always passes.
-
 		print("Total frame count:", totalFrameCount)
-
-		for await imageResult in generator.images(for: times) {
-			try Task.checkCancellation()
-
-			let requestedTime = imageResult.requestedTime
-
-			// `generator.images` returns old frames randomly. For example, after index 7, it would emit index 3 another time. We filter out times that are lower than last. (macOS 14.3)
-			guard requestedTime.seconds > previousTime else {
-				continue
-			}
-
-			previousTime = requestedTime.seconds
-
-			guard let image = conversion.croppedImage(image: try imageResult.image) else {
-				throw GIFGenerator.Error.cropNotInBounds
-			}
-
-			let actualTime = try imageResult.actualTime
-
-			do {
-				let frameNumber = index
-
-				if index > 0 {
-					assert(actualTime.seconds > 0)
-				}
-
-				// TODO: Use a custom executer for this when using Swift 6.
-				try gifski?.addFrame(
-					image,
-					frameNumber: frameNumber,
-					presentationTimestamp: max(0, actualTime.seconds - startTime) + loopDelayOffset
-				)
-
-				if conversion.bounce {
-					/*
-					Inserts the frame again at the reverse index of the natural order.
-
-					For example, if this frame is at index 2 of 5 in its natural order:
-
-					```
-						  ↓
-					0, 1, 2, 3, 4
-					```
-
-					Then the frame should be inserted at 6 of 9 in the reverse order:
-
-					```
-									  ↓
-					0, 1, 2, 3, 4, 3, 2, 1, 0
-					```
-					*/
-					let reverseFrameNumber = totalFrameCount - frameNumber - 1
-
-					// Determine the reverse timestamp by finding the expected timestamp (frame number / frame rate) and adjusting for the image generator's slippage (actualTime - requestedTime)
-					let expectedReverseTimestamp = TimeInterval(reverseFrameNumber) / TimeInterval(frameRate)
-					let timestampSlippage = actualTime - requestedTime
-					let actualReverseTimestamp = max(0, expectedReverseTimestamp + timestampSlippage.seconds) + loopDelayOffset
-
-					// Prevent duplicate frame with the same frame number causing an unwanted frame at the end of the GIF.
-					if frameNumber != reverseFrameNumber {
-						try gifski?.addFrame(
-							image,
-							frameNumber: reverseFrameNumber,
-							presentationTimestamp: actualReverseTimestamp
-						)
-					}
-				}
-
-				index += 1
-			} catch {
-				throw Error.addFrameFailed(error)
-			}
-
-			await Task.yield() // Give `addFrame` room to start.
-		}
 
 		guard let gifski else {
 			throw CancellationError()
 		}
 
+		try await addFrames(
+			to: gifski,
+			reader: reader,
+			output: output,
+			frameTimes: frameTimes,
+			conversion: conversion,
+			totalFrameCount: totalFrameCount,
+			frameRate: frameRate,
+			startTime: startTime,
+			loopDelayOffset: loopDelayOffset
+		)
+
 		return try gifski.finish()
 	}
 
+	private func addFrames(
+		to gifski: Gifski,
+		reader: AVAssetReader,
+		output: AVAssetReaderVideoCompositionOutput,
+		frameTimes: [CMTime],
+		conversion: Conversion,
+		totalFrameCount: Int,
+		frameRate: Double,
+		startTime: Double,
+		loopDelayOffset: Double
+	) async throws {
+		let readerCancellation = AssetReaderCancellation(reader: reader)
+		let gifskiCapture = SendableGifskiCapture(gifski)
+
+		try await withTaskCancellationHandler {
+			try readFrames(
+				to: gifskiCapture.gifski,
+				reader: reader,
+				output: output,
+				frameTimes: frameTimes,
+				conversion: conversion,
+				totalFrameCount: totalFrameCount,
+				frameRate: frameRate,
+				startTime: startTime,
+				loopDelayOffset: loopDelayOffset
+			)
+		} onCancel: {
+			readerCancellation.cancel()
+		}
+	}
+
 	/**
-	Creates an image generator for the provided conversion.
+	Creates a sequential frame reader for the provided conversion.
 
 	- Parameters:
-		- conversion: The conversion source of the image generator.
-	- Returns: An `AVAssetImageGenerator` along with the times of the frames requested by the conversion.
+		- conversion: The conversion source of the reader.
+	- Returns: An `AVAssetReader`, its video output, the target frame times, and the target GIF frame rate.
 	*/
-	private func imageGenerator(for conversion: Conversion) async throws -> (generator: AVAssetImageGenerator, times: [CMTime], frameRate: Int) {
+	private func makeFrameReader(for conversion: Conversion) async throws -> (reader: AVAssetReader, output: AVAssetReaderVideoCompositionOutput, targetFrameTimes: [CMTime], frameRate: Double) {
 		let asset = conversion.asset
 //
 //		record(
@@ -257,8 +233,7 @@ actor GIFGenerator {
 			throw Error.unreadableFile
 		}
 
-		// We use the duration of the first video track since the total duration of the asset can actually be longer than the video track. If we use the total duration and the video is shorter, we'll get errors in `generateCGImagesAsynchronously` (#119).
-		// We already extract the video into a new asset in `VideoValidator` if the first video track is shorter than the asset duration, so the handling here is not strictly necessary but kept just to be safe.
+		// Use the first video track range because the total asset duration can be longer than the video track. Reading past the video track can fail or stall (#119).
 		let (timeRange, timescale) = try await firstVideoTrack.load(.timeRange, .naturalTimeScale)
 		guard let videoTrackRange = timeRange.range else {
 			throw Error.unreadableFile
@@ -270,28 +245,17 @@ actor GIFGenerator {
 //			value: asset.debugInfo
 //		)
 
-		let generator = AVAssetImageGenerator(asset: asset)
-
-		// Images are returned already rotated to match how the user sees the video.
-		// This means crop coordinates (defined in rotated space) can be applied directly.
-		generator.appliesPreferredTrackTransform = true
-
-		generator.requestedTimeToleranceBefore = .zero
-		generator.requestedTimeToleranceAfter = .zero
-
-		// We are intentionally not setting a `generator.maximumSize` as it's buggy: https://github.com/sindresorhus/Gifski/pull/278
-
-		// Even though we enforce a minimum of 3 FPS in the GUI, a source video could have lower FPS, and we should allow that.
-		var frameRate = (conversion.frameRate.map(Double.init) ?? assetFrameRate).clamped(to: 0.1...Constants.allowedFrameRate.upperBound)
-		frameRate = min(frameRate, assetFrameRate)
+		// Explicit frame rate is authoritative because speed-adjusted compositions can legitimately need more frames per second than the source track's nominal FPS.
+		let frameRate = (conversion.frameRate.map(Double.init) ?? assetFrameRate).clamped(to: 0.1...Constants.allowedFrameRate.upperBound)
 
 		print("Video FPS:", frameRate)
 
 		// TODO: Instead of calculating what part of the video to get, we could just trim the actual `AVAssetTrack`.
-		let videoRange = conversion.timeRange?.clamped(to: videoTrackRange) ?? videoTrackRange
+		let videoRange = conversion.timeRange?.clampingBounds(to: videoTrackRange) ?? videoTrackRange
 		let startTime = videoRange.lowerBound
 		let duration = videoRange.length
 		let frameCount = Int(duration * frameRate)
+		let frameStep = 1 / frameRate
 
 		print("Video frame count:", frameCount)
 
@@ -299,8 +263,7 @@ actor GIFGenerator {
 			throw Error.notEnoughFrames(frameCount)
 		}
 
-		let frameStep = 1 / frameRate
-		var frameForTimes: [CMTime] = (0..<frameCount).map { index in
+		var targetFrameTimes: [CMTime] = (0..<frameCount).map { index in
 			let presentationTimestamp = startTime + (frameStep * Double(index))
 			return CMTime(
 				seconds: presentationTimestamp,
@@ -311,7 +274,7 @@ actor GIFGenerator {
 		// We don't do this when "bounce" is enabled as the bounce calculations are not able to handle this.
 		if !conversion.bounce {
 			// Ensure we include the last frame. For example, the above might have calculated `[..., 6.25, 6.3]`, but the duration is `6.3647`, so we might miss the last frame if it appears for a short time.
-			frameForTimes.append(CMTime(seconds: startTime + duration, preferredTimescale: timescale))
+			targetFrameTimes.append(CMTime(seconds: startTime + duration, preferredTimescale: timescale))
 		}
 //
 //		record(
@@ -331,11 +294,234 @@ actor GIFGenerator {
 //		)
 //		record(
 //			jobKey: jobKey,
-//			key: "frameForTimes",
-//			value: frameForTimes.map(\.seconds)
+//			key: "targetFrameTimes",
+//			value: targetFrameTimes.map(\.seconds)
 //		)
 
-		return (generator, frameForTimes, Int(frameRate))
+		let frameDuration = CMTime(seconds: frameStep, preferredTimescale: timescale)
+		let readerEndTime = min(videoRange.upperBound + frameStep, videoTrackRange.upperBound)
+		let reader = try AVAssetReader(asset: asset)
+		reader.timeRange = (videoRange.lowerBound...readerEndTime).cmTimeRange
+
+		// Read frames sequentially through a video composition so AVFoundation applies scale, crop, and orientation in one decode pass.
+		let output = try await makeFrameReaderOutput(
+			conversion: conversion,
+			videoTrack: firstVideoTrack,
+			videoTrackRange: videoTrackRange,
+			frameDuration: frameDuration
+		)
+
+		guard reader.canAdd(output) else {
+			throw Error.unreadableFile
+		}
+
+		reader.add(output)
+
+		return (reader, output, targetFrameTimes, frameRate)
+	}
+
+	private func makeFrameReaderOutput(
+		conversion: Conversion,
+		videoTrack: AVAssetTrack,
+		videoTrackRange: ClosedRange<Double>,
+		frameDuration: CMTime
+	) async throws -> AVAssetReaderVideoCompositionOutput {
+		let output = AVAssetReaderVideoCompositionOutput(
+			videoTracks: [videoTrack],
+			videoSettings: [
+				kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+			]
+		)
+		output.alwaysCopiesSampleData = false
+		output.videoComposition = try await conversion.videoComposition(
+			for: videoTrack,
+			timeRange: videoTrackRange.cmTimeRange,
+			frameDuration: frameDuration
+		)
+
+		return output
+	}
+
+	private func readFrames(
+		to gifski: Gifski,
+		reader: AVAssetReader,
+		output: AVAssetReaderVideoCompositionOutput,
+		frameTimes: [CMTime],
+		conversion: Conversion,
+		totalFrameCount: Int,
+		frameRate: Double,
+		startTime: Double,
+		loopDelayOffset: Double
+	) throws {
+		guard reader.startReading() else {
+			throw Error.generateFrameFailed(reader.error ?? Error.unreadableFile)
+		}
+		defer {
+			if reader.status == .reading {
+				reader.cancelReading()
+			}
+		}
+
+		guard let firstSampleBuffer = output.copyNextSampleBuffer() else {
+			try throwIfReaderFailedOrWasCancelled(reader)
+			throw Error.generateFrameFailed(reader.error ?? Error.unreadableFile)
+		}
+
+		var frameNumber = 0
+		var previousSampleBuffer = firstSampleBuffer
+
+		while frameNumber < frameTimes.count {
+			try Task.checkCancellation()
+
+			guard let sampleBuffer = output.copyNextSampleBuffer() else {
+				break
+			}
+
+			// `outputPresentationTimeStamp` is in the composed output timeline, which is what `frameTimes` uses after trimming, speed changes, and video composition transforms.
+			let sampleTime = sampleBuffer.outputPresentationTimeStamp
+
+			if sampleTime > frameTimes[frameNumber] {
+				// `AVAssetReader` emits composed frames, while `frameTimes` are the GIF output times. Use the previous decoded sample for every target time before the current output frame.
+				let image = try cgImage(from: previousSampleBuffer)
+
+				while
+					frameNumber < frameTimes.count,
+					sampleTime > frameTimes[frameNumber]
+				{
+					try addFrame(
+						to: gifski,
+						image: image,
+						frameNumber: frameNumber,
+						presentationTimestamp: max(0, frameTimes[frameNumber].seconds - startTime) + loopDelayOffset,
+						conversion: conversion,
+						totalFrameCount: totalFrameCount,
+						frameRate: frameRate,
+						loopDelayOffset: loopDelayOffset
+					)
+					frameNumber += 1
+				}
+			}
+
+			previousSampleBuffer = sampleBuffer
+		}
+
+		if frameNumber < frameTimes.count {
+			try throwIfReaderFailedOrWasCancelled(reader)
+
+			// The requested GIF can include the exact end time, which may be after the last decoded sample. Reuse the final source frame for any remaining target times.
+			let image = try cgImage(from: previousSampleBuffer)
+
+			while frameNumber < frameTimes.count {
+				try addFrame(
+					to: gifski,
+					image: image,
+					frameNumber: frameNumber,
+					presentationTimestamp: max(0, frameTimes[frameNumber].seconds - startTime) + loopDelayOffset,
+					conversion: conversion,
+					totalFrameCount: totalFrameCount,
+					frameRate: frameRate,
+					loopDelayOffset: loopDelayOffset
+				)
+				frameNumber += 1
+			}
+		}
+
+		try throwIfReaderFailedOrWasCancelled(reader)
+	}
+
+	/**
+	Throws if the reader failed or was cancelled.
+	*/
+	private func throwIfReaderFailedOrWasCancelled(_ reader: AVAssetReader) throws {
+		switch reader.status {
+		case .completed, .reading:
+			break
+		case .failed:
+			throw Error.generateFrameFailed(reader.error ?? Error.unreadableFile)
+		case .cancelled:
+			throw CancellationError()
+		case .unknown:
+			throw Error.unreadableFile
+		@unknown default:
+			throw Error.unreadableFile
+		}
+	}
+
+	private func cgImage(from sampleBuffer: CMSampleBuffer) throws(Error) -> CGImage {
+		guard let pixelBuffer = sampleBuffer.imageBuffer else {
+			throw .missingPixelBuffer
+		}
+
+		var cgImage: CGImage?
+		let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
+
+		guard
+			status == noErr,
+			let cgImage
+		else {
+			throw .couldNotCreateImageFromFrame
+		}
+
+		return cgImage
+	}
+
+	private func addFrame(
+		to gifski: Gifski,
+		image: CGImage,
+		frameNumber: Int,
+		presentationTimestamp: Double,
+		conversion: Conversion,
+		totalFrameCount: Int,
+		frameRate: Double,
+		loopDelayOffset: Double
+	) throws {
+		do {
+			try gifski.addFrame(
+				image,
+				frameNumber: frameNumber,
+				presentationTimestamp: presentationTimestamp
+			)
+		} catch {
+			throw Error.addFrameFailed(error)
+		}
+
+		guard conversion.bounce else {
+			return
+		}
+
+		/*
+		Inserts the frame again at the reverse index of the natural order.
+
+		For example, if this frame is at index 2 of 5 in its natural order:
+
+		```
+			  ↓
+		0, 1, 2, 3, 4
+		```
+
+		Then the frame should be inserted at 6 of 9 in the reverse order:
+
+		```
+						  ↓
+		0, 1, 2, 3, 4, 3, 2, 1, 0
+		```
+		*/
+		let reverseFrameNumber = totalFrameCount - frameNumber - 1
+
+		// Prevent duplicate frame with the same frame number causing an unwanted frame at the end of the GIF.
+		guard frameNumber != reverseFrameNumber else {
+			return
+		}
+
+		do {
+			try gifski.addFrame(
+				image,
+				frameNumber: reverseFrameNumber,
+				presentationTimestamp: max(0, TimeInterval(reverseFrameNumber) / frameRate) + loopDelayOffset
+			)
+		} catch {
+			throw Error.addFrameFailed(error)
+		}
 	}
 
 	private func totalFrameCount(for conversion: Conversion, sourceFrameCount: Int) -> Int {
@@ -351,6 +537,28 @@ actor GIFGenerator {
 		```
 		*/
 		conversion.bounce ? (sourceFrameCount * 2 - 1) : sourceFrameCount
+	}
+}
+
+private final class AssetReaderCancellation: @unchecked Sendable {
+	// `AVAssetReader` is not Sendable, but the cancellation handler only calls `cancelReading()` to stop an in-flight read.
+	private let reader: AVAssetReader
+
+	init(reader: AVAssetReader) {
+		self.reader = reader
+	}
+
+	func cancel() {
+		reader.cancelReading()
+	}
+}
+
+private final class SendableGifskiCapture: @unchecked Sendable {
+	// Wraps `Gifski` with `@unchecked Sendable` so it can cross the `@Sendable` boundary of the `withTaskCancellationHandler` operation closure. The cancel handler does not touch it.
+	let gifski: Gifski
+
+	init(_ gifski: Gifski) {
+		self.gifski = gifski
 	}
 }
 
@@ -407,30 +615,32 @@ extension GIFGenerator.Conversion {
 	*/
 	var scale: CGSize {
 		get async throws {
-			guard let trackDimensions = try await trackDimensions else {
+			guard let videoTrack = try await asset.firstVideoTrack else {
 				return .one
 			}
-			guard trackDimensions > 0 else {
-				throw Error.invalidDimensions
-			}
-			guard let dimensions = dimensionsAsCGSize else {
-				return .one
-			}
-			let scale = dimensions / trackDimensions
-			guard scale > 0 else {
-				throw Error.invalidScale
-			}
-			return scale
+
+			return try await scale(for: videoTrack)
 		}
 	}
 
 	/**
-	- Returns: Dimensions of the first video track after applying preferredTransform
+	Returns the current scale of the explicit output dimensions compared to the provided video track.
 	*/
-	var trackDimensions: CGSize? {
-		get async throws {
-			try await asset.firstVideoTrack?.dimensions
+	func scale(for videoTrack: AVAssetTrack) async throws -> CGSize {
+		guard let trackDimensions = try await videoTrack.dimensions else {
+			return .one
 		}
+		guard trackDimensions > 0 else {
+			throw Error.invalidDimensions
+		}
+		guard let dimensions = dimensionsAsCGSize else {
+			return .one
+		}
+		let scale = dimensions / trackDimensions
+		guard scale > 0 else {
+			throw Error.invalidScale
+		}
+		return scale
 	}
 
 	var dimensionsAsCGSize: CGSize? {
@@ -444,14 +654,27 @@ extension GIFGenerator.Conversion {
 	*/
 	var renderSize: CGSize {
 		get async throws {
-			if let dimensionsAsCGSize {
-				return dimensionsAsCGSize
-			}
-			guard let trackSize = try await trackDimensions else {
+			guard let videoTrack = try await asset.firstVideoTrack else {
 				throw Error.invalidDimensions
 			}
-			return trackSize
+
+			return try await renderSize(for: videoTrack)
 		}
+	}
+
+	/**
+	Returns the render size for the provided track, using explicit conversion dimensions when set.
+	*/
+	func renderSize(for videoTrack: AVAssetTrack) async throws -> CGSize {
+		if let dimensionsAsCGSize {
+			return dimensionsAsCGSize
+		}
+
+		guard let trackSize = try await videoTrack.dimensions else {
+			throw Error.invalidDimensions
+		}
+
+		return trackSize
 	}
 
 	/**
@@ -468,30 +691,70 @@ extension GIFGenerator.Conversion {
 
 	The crop rect from the UI is defined in the preferred/rotated space (how the user sees the video). To apply it to `naturalSize`, we need to transform it from rotated space to natural space.
 	*/
-	var cropRectAppliedToNaturalSize: CGRect {
+	var cropRectInNaturalSpace: CGRect {
 		get async throws {
 			guard let videoTrack = try await asset.firstVideoTrack else {
 				return .zero
 			}
 
 			let (naturalSize, preferredTransform) = try await videoTrack.load(.naturalSize, .preferredTransform)
-
-			// Get the rotated dimensions (how the user sees the video)
-			let rotatedSize = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform).size
-			let rotatedDimensions = CGSize(width: abs(rotatedSize.width), height: abs(rotatedSize.height))
-
-			// The crop rect is defined in rotated space, so unnormalize it using rotated dimensions
-			let cropRectInRotatedSpace = (crop ?? .initial).unnormalize(forDimensions: rotatedDimensions)
-
-			// Transform the crop rect from rotated space back to natural space
-			return cropRectInRotatedSpace.applying(preferredTransform.inverted())
+			return cropRectInNaturalSpace(naturalSize: naturalSize, preferredTransform: preferredTransform)
 		}
 	}
 
-	var exportModifiedRenderRect: CGRect {
-		get async throws {
-			unnormalizedCropRect(sizeInPreferredTransformationSpace: try await renderSize)
-		}
+	/**
+	Returns the crop rect transformed from preferred/rotated space into the provided natural video space.
+	*/
+	func cropRectInNaturalSpace(
+		naturalSize: CGSize,
+		preferredTransform: CGAffineTransform
+	) -> CGRect {
+		let rotatedSize = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform).size
+		let rotatedDimensions = CGSize(width: abs(rotatedSize.width), height: abs(rotatedSize.height))
+
+		let cropRectInRotatedSpace = (crop ?? .initial).unnormalize(forDimensions: rotatedDimensions)
+
+		return cropRectInRotatedSpace.applying(preferredTransform.inverted())
+	}
+
+	/**
+	Creates an `AVVideoComposition` that scales, translates, and crops `videoTrack` using this conversion's output settings. `geometryTrack` lets export apply the source track's natural size and orientation while rendering an `AVMutableCompositionTrack`.
+	*/
+	func videoComposition(
+		for videoTrack: AVAssetTrack,
+		usingGeometryOf geometryTrack: AVAssetTrack? = nil,
+		timeRange: CMTimeRange,
+		frameDuration: CMTime
+	) async throws -> AVVideoComposition {
+		let geometryTrack = geometryTrack ?? videoTrack
+		let outputRenderSize = unnormalizedCropRect(sizeInPreferredTransformationSpace: try await renderSize(for: geometryTrack)).size
+		// Layer instructions operate in natural space (unrotated). The crop rect from UI is in preferred space, so transform it back to natural space before applying it.
+		let (naturalSize, loadedPreferredTransform) = try await geometryTrack.load(.naturalSize, .preferredTransform)
+		let preferredTransform = trackPreferredTransform ?? loadedPreferredTransform
+		let cropRect = cropRectInNaturalSpace(naturalSize: naturalSize, preferredTransform: preferredTransform)
+		let scaleTransform = CGAffineTransform(scaledBy: try await scale(for: geometryTrack))
+		// Crop is applied before the layer transform, so translate using the crop rect after scale and preferred orientation have moved it into render space.
+		let scaledCropRect = cropRect.applying(scaleTransform)
+		let cropRectAfterPreferred = scaledCropRect.applying(preferredTransform)
+
+		// Place the crop rect in the top left corner.
+		let translateTransform = CGAffineTransform(translationX: -cropRectAfterPreferred.minX, y: -cropRectAfterPreferred.minY)
+
+		var layerConfig = AVVideoCompositionLayerInstruction.Configuration(assetTrack: videoTrack)
+		layerConfig.setCropRectangle(cropRect, at: .zero)
+		layerConfig.setTransform(scaleTransform.concatenating(preferredTransform).concatenating(translateTransform), at: .zero)
+
+		let instructionConfig = AVVideoCompositionInstruction.Configuration(
+			layerInstructions: [AVVideoCompositionLayerInstruction(configuration: layerConfig)],
+			timeRange: timeRange
+		)
+		let config = AVVideoComposition.Configuration(
+			frameDuration: frameDuration,
+			instructions: [AVVideoCompositionInstruction(configuration: instructionConfig)],
+			renderSize: outputRenderSize
+		)
+
+		return AVVideoComposition(configuration: config)
 	}
 
 	/**
@@ -527,6 +790,8 @@ extension GIFGenerator {
 		case invalidSettings
 		case unreadableFile
 		case notEnoughFrames(Int)
+		case missingPixelBuffer
+		case couldNotCreateImageFromFrame
 		case generateFrameFailed(Swift.Error)
 		case addFrameFailed(Swift.Error)
 		case writeFailed(Swift.Error)
@@ -541,6 +806,10 @@ extension GIFGenerator {
 				"The selected file is no longer readable."
 			case .notEnoughFrames(let frameCount):
 				"An animated GIF requires a minimum of 2 frames. Your video contains \(frameCount) frame\(frameCount == 1 ? "" : "s")."
+			case .missingPixelBuffer:
+				"The video frame did not contain a pixel buffer."
+			case .couldNotCreateImageFromFrame:
+				"Could not create an image from the video frame."
 			case .generateFrameFailed(let error):
 				"Failed to generate frame: \(error.localizedDescription)"
 			case .addFrameFailed(let error):

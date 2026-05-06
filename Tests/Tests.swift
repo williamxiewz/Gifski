@@ -1,4 +1,6 @@
+import AVFoundation
 import CoreGraphics
+import ImageIO
 import Testing
 import UniformTypeIdentifiers
 @testable import Gifski
@@ -19,6 +21,499 @@ struct Tests {
 	) throws -> Duration {
 		let timeRemaining = estimator.update(progress: progress, instant: instant)
 		return try #require(timeRemaining)
+	}
+
+	private func conversion(
+		timeRange: ClosedRange<Double>? = nil,
+		quality: Double = 1,
+		dimensions: (width: Int, height: Int)? = nil,
+		frameRate: Int? = nil,
+		loop: Gifski.Loop = .never,
+		bounce: Bool = false,
+		crop: CropRect? = nil,
+		trackPreferredTransform: CGAffineTransform? = nil
+	) -> GIFGenerator.Conversion {
+		let url = URL(filePath: "/dev/null")
+
+		return .init(
+			asset: AVURLAsset(url: url),
+			sourceURL: url,
+			timeRange: timeRange,
+			quality: quality,
+			dimensions: dimensions,
+			frameRate: frameRate,
+			loop: loop,
+			bounce: bounce,
+			crop: crop,
+			trackPreferredTransform: trackPreferredTransform
+		)
+	}
+
+	private func fullPreviewSettings(
+		timeRange: ClosedRange<Double>? = nil,
+		speed: Double = 1,
+		frameRate: Int = 10,
+		duration: Duration = .seconds(10)
+	) -> SettingsForFullPreview {
+		// Defaults keep each preview-reuse test focused on only the setting it changes.
+		.init(
+			conversion: conversion(timeRange: timeRange),
+			speed: speed,
+			frameRate: frameRate,
+			assetDuration: duration
+		)
+	}
+
+	private func pixelBuffer() throws -> CVPixelBuffer {
+		var pixelBuffer: CVPixelBuffer?
+		let status = CVPixelBufferCreate(
+			nil,
+			1,
+			1,
+			kCVPixelFormatType_32BGRA,
+			nil,
+			&pixelBuffer
+		)
+		#expect(status == kCVReturnSuccess)
+		return try #require(pixelBuffer)
+	}
+
+	private func makeTestVideo() async throws -> URL {
+		let directory = try URL.uniqueTemporaryDirectory()
+		let outputURL = directory.appending(path: "test.mov")
+		let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+		let input = AVAssetWriterInput(
+			mediaType: .video,
+			outputSettings: [
+				AVVideoCodecKey: AVVideoCodecType.h264,
+				AVVideoWidthKey: 16,
+				AVVideoHeightKey: 16
+			]
+		)
+		input.expectsMediaDataInRealTime = false
+
+		let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+			assetWriterInput: input,
+			sourcePixelBufferAttributes: [
+				kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+				kCVPixelBufferWidthKey as String: 16,
+				kCVPixelBufferHeightKey as String: 16
+			]
+		)
+
+		try #require(writer.canAdd(input))
+		writer.add(input)
+
+		try #require(writer.startWriting())
+		writer.startSession(atSourceTime: .zero)
+
+		for frameNumber in 0..<4 {
+			for _ in 0..<100 {
+				guard !input.isReadyForMoreMediaData else {
+					break
+				}
+				if let error = writer.error {
+					throw error
+				}
+				try await Task.sleep(for: .milliseconds(10))
+			}
+			try #require(input.isReadyForMoreMediaData)
+
+			let color = UInt8(frameNumber * 60)
+			let pixelBuffer = try makePixelBuffer(red: color, green: 255 - color, blue: color / 2)
+			let presentationTime = CMTime(value: CMTimeValue(frameNumber), timescale: 2)
+			try #require(adaptor.append(pixelBuffer, withPresentationTime: presentationTime))
+		}
+
+		input.markAsFinished()
+		await writer.finishWriting()
+
+		if let error = writer.error {
+			throw error
+		}
+		try #require(writer.status == .completed)
+		return outputURL
+	}
+
+	private func makePixelBuffer(
+		red: UInt8,
+		green: UInt8,
+		blue: UInt8
+	) throws -> CVPixelBuffer {
+		var newPixelBuffer: CVPixelBuffer?
+		let status = CVPixelBufferCreate(
+			nil,
+			16,
+			16,
+			kCVPixelFormatType_32BGRA,
+			nil,
+			&newPixelBuffer
+		)
+		#expect(status == kCVReturnSuccess)
+		let pixelBuffer = try #require(newPixelBuffer)
+
+		CVPixelBufferLockBaseAddress(pixelBuffer, [])
+		defer {
+			CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+		}
+
+		guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+			throw "Could not access pixel buffer storage.".toError
+		}
+
+		let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+		let height = CVPixelBufferGetHeight(pixelBuffer)
+		let width = CVPixelBufferGetWidth(pixelBuffer)
+		let buffer = baseAddress.bindMemory(to: UInt8.self, capacity: bytesPerRow * height)
+
+		for y in 0..<height {
+			for x in 0..<width {
+				let offset = (y * bytesPerRow) + (x * 4)
+				buffer[offset] = blue
+				buffer[offset + 1] = green
+				buffer[offset + 2] = red
+				buffer[offset + 3] = 255
+			}
+		}
+
+		return pixelBuffer
+	}
+
+	private func gifFrameCount(_ gifData: Data) throws -> Int {
+		let imageSource = try #require(CGImageSourceCreateWithData(gifData as CFData, nil))
+		return CGImageSourceGetCount(imageSource)
+	}
+
+	private func imageDimensions(gifData: Data) throws -> CGSize {
+		let imageSource = try #require(CGImageSourceCreateWithData(gifData as CFData, nil))
+		let image = try #require(CGImageSourceCreateImageAtIndex(imageSource, 0, nil))
+		return .init(width: image.width, height: image.height)
+	}
+
+	private func averageRedValue(gifData: Data, frameIndex: Int) throws -> Double {
+		let imageSource = try #require(CGImageSourceCreateWithData(gifData as CFData, nil))
+		let image = try #require(CGImageSourceCreateImageAtIndex(imageSource, frameIndex, nil))
+		let width = image.width
+		let height = image.height
+		var pixels = [UInt8](repeating: 0, count: width * height * 4)
+		let context = try #require(CGContext(
+			data: &pixels,
+			width: width,
+			height: height,
+			bitsPerComponent: 8,
+			bytesPerRow: width * 4,
+			space: CGColorSpaceCreateDeviceRGB(),
+			bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+		))
+
+		context.draw(image, in: .init(x: 0, y: 0, width: Double(width), height: Double(height)))
+
+		var redTotal = 0
+		for offset in stride(from: 0, to: pixels.count, by: 4) {
+			redTotal += Int(pixels[offset])
+		}
+
+		return Double(redTotal) / Double(width * height)
+	}
+
+	@Test
+	func exportModifiedVideoStateUpdatesProgressSheetVisibilityOnlyWhileExporting() {
+		let task = Task {}
+		defer {
+			task.cancel()
+		}
+		var state = ExportModifiedVideoState.exporting(task, shouldShowProgressSheet: false)
+
+		let updatedWhileExporting = state.updateProgressSheetVisibility(true)
+
+		#expect(updatedWhileExporting)
+		#expect(state == .exporting(task, shouldShowProgressSheet: true))
+
+		state = .idle
+
+		let updatedWhileIdle = state.updateProgressSheetVisibility(true)
+
+		#expect(!updatedWhileIdle)
+		#expect(state == .idle)
+
+		state = .finished(URL(filePath: "/dev/null"))
+
+		let updatedWhileFinished = state.updateProgressSheetVisibility(true)
+
+		#expect(!updatedWhileFinished)
+		#expect(state == .finished(URL(filePath: "/dev/null")))
+	}
+
+	@Test
+	func fullPreviewWithNoGeneratedFramesThrowsInsteadOfCrashing() async throws {
+		let event = FullPreviewGenerationEvent.ready(
+			settings: .init(
+				conversion: conversion(),
+				speed: 1,
+				frameRate: 10,
+				assetDuration: .seconds(1)
+			),
+			gifData: [],
+			requestID: 0
+		)
+
+		let originalFrame = try pixelBuffer()
+
+		await #expect(throws: (any Error).self) {
+			_ = try await event.getPreviewFrame(
+				originalFrame: originalFrame,
+				compositionTime: .zero
+			)
+		}
+	}
+
+	@Test
+	func fullPreviewReusesReadyPreviewWhenNewTimeRangeIsContained() {
+		// A finished full preview can satisfy narrower trim ranges because it already has frames for the requested slice.
+		let oldSettings = fullPreviewSettings(timeRange: 0...10)
+		let newSettings = fullPreviewSettings(timeRange: 2...4)
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: false,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(!needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewRegeneratesForContainedTimeRangeWhileGenerating() {
+		// While generation is in progress, there is no completed frame cache to slice from yet.
+		let oldSettings = fullPreviewSettings(timeRange: 0...10)
+		let newSettings = fullPreviewSettings(timeRange: 2...4)
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: true,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewRegeneratesWhenFrameRateChanges() {
+		let oldSettings = fullPreviewSettings(frameRate: 10)
+		let newSettings = fullPreviewSettings(frameRate: 12)
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: false,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewRegeneratesWhenAssetDurationChanges() {
+		let oldSettings = fullPreviewSettings(duration: .seconds(10))
+		let newSettings = fullPreviewSettings(duration: .seconds(12))
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: false,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewReusesReadyPreviewWhenBothTimeRangesAreNil() {
+		let oldSettings = fullPreviewSettings()
+		let newSettings = fullPreviewSettings()
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: false,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(!needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewReusesReadyPreviewWhenOldTimeRangeIsNilAndNewIsExplicit() {
+		// nil means the full duration was previewed, so any explicit sub-range is a subset.
+		let oldSettings = fullPreviewSettings()
+		let newSettings = fullPreviewSettings(timeRange: 2...4)
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: false,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(!needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewRegeneratesWhenNewTimeRangeIsWiderThanOld() {
+		// Old previewed a sub-range, new wants the full duration.
+		let oldSettings = fullPreviewSettings(timeRange: 2...4)
+		let newSettings = fullPreviewSettings()
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: false,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewRegeneratesWhenSpeedChanges() {
+		let oldSettings = fullPreviewSettings(speed: 1)
+		let newSettings = fullPreviewSettings(speed: 2)
+
+		let needsNewPreview = oldSettings.areSettingsDifferentEnoughForANewFullPreview(
+			newSettings: newSettings,
+			areCurrentlyGenerating: false,
+			oldRequestID: 1,
+			newRequestID: 2
+		)
+
+		#expect(needsNewPreview)
+	}
+
+	@Test
+	func fullPreviewConversionUsesExplicitPreviewFrameRate() {
+		// Full preview strips loop/bounce, but must use the frame rate already adjusted for output speed.
+		let settings = SettingsForFullPreview(
+			conversion: conversion(
+				timeRange: 2...4,
+				dimensions: (width: 320, height: 240),
+				frameRate: 50,
+				loop: .forever,
+				bounce: true,
+				trackPreferredTransform: .init(translationX: 10, y: 20)
+			),
+			speed: 1,
+			frameRate: 12,
+			assetDuration: .seconds(10)
+		)
+
+		let converted = settings.conversion.toConversion(
+			asset: AVURLAsset(url: URL(filePath: "/dev/null")),
+			frameRate: settings.frameRate
+		)
+
+		#expect(converted.timeRange == 2...4)
+		#expect(converted.dimensions?.width == 320)
+		#expect(converted.dimensions?.height == 240)
+		#expect(converted.frameRate == 12)
+		#expect(!converted.loop.isLooping)
+		#expect(!converted.bounce)
+		#expect(converted.trackPreferredTransform == .init(translationX: 10, y: 20))
+	}
+
+	@Test
+	func gifGenerationReadsFramesFromVideoAsset() async throws {
+		let videoURL = try await makeTestVideo()
+		defer {
+			try? videoURL.deletingLastPathComponent().delete()
+		}
+
+		let data = try await GIFGenerator.run(
+			.init(
+				asset: AVURLAsset(url: videoURL),
+				sourceURL: videoURL,
+				timeRange: 0...1.5,
+				quality: 0.8,
+				dimensions: (width: 8, height: 8),
+				frameRate: 2,
+				loop: .never,
+				bounce: false,
+				crop: .init(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+			)
+		) { _ in }
+
+		#expect(data.starts(with: Data("GIF".utf8)))
+		#expect(try imageDimensions(gifData: data) == .init(width: 4, height: 4))
+		#expect(try gifFrameCount(data) == 4)
+
+		let previousFrameRedValue = try averageRedValue(gifData: data, frameIndex: 2)
+		let endFrameRedValue = try averageRedValue(gifData: data, frameIndex: 3)
+		#expect(endFrameRedValue > previousFrameRedValue + 20)
+	}
+
+	@Test
+	func gifGenerationWithBounceProducesCorrectFrameCount() async throws {
+		let videoURL = try await makeTestVideo()
+		defer {
+			try? videoURL.deletingLastPathComponent().delete()
+		}
+
+		let data = try await GIFGenerator.run(
+			.init(
+				asset: AVURLAsset(url: videoURL),
+				sourceURL: videoURL,
+				timeRange: 0...1.5,
+				quality: 0.8,
+				dimensions: (width: 8, height: 8),
+				frameRate: 2,
+				loop: .never,
+				bounce: true
+			)
+		) { _ in }
+
+		#expect(data.starts(with: Data("GIF".utf8)))
+		// 1.5s at 2fps = 3 frames, bounce doubles minus apex = 3*2-1 = 5
+		#expect(try gifFrameCount(data) == 5)
+	}
+
+	@Test
+	func exportModifiedVideoCreatesMovieFromVideoAsset() async throws {
+		let videoURL = try await makeTestVideo()
+		defer {
+			try? videoURL.deletingLastPathComponent().delete()
+		}
+
+		let outputURL = try await exportModifiedVideo(
+			conversion: .init(
+				asset: AVURLAsset(url: videoURL),
+				sourceURL: videoURL,
+				timeRange: 0...1.5,
+				quality: 1,
+				dimensions: (width: 8, height: 8),
+				frameRate: 2,
+				loop: .never,
+				bounce: false,
+				crop: .init(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+			)
+		)
+		defer {
+			try? outputURL.delete()
+		}
+
+		let asset = AVURLAsset(url: outputURL)
+		#expect(outputURL.exists)
+		#expect(try await asset.dimensions == .init(width: 4, height: 4))
+		#expect(try await asset.load(.duration).seconds > 0)
+	}
+
+	@Test
+	func effectiveFrameRateRangeUsesSpeedAdjustedVideoFrameRate() {
+		#expect(29.97.effectiveFrameRateRange(speed: 1) == 3...30)
+		#expect(29.97.effectiveFrameRateRange(speed: 2) == 3...50)
+		#expect(29.97.effectiveFrameRateRange(speed: 0.5) == 3...15)
+		#expect(120.0.effectiveFrameRateRange(speed: 1) == 3...50)
+		#expect(2.0.effectiveFrameRateRange(speed: 1) == 3...3)
 	}
 
 	@Test
@@ -277,7 +772,7 @@ struct Tests {
 	func writeToUniqueFileAddsIncrementingSuffixes() async throws {
 		let directory = try URL.uniqueTemporaryDirectory()
 		defer {
-			try? FileManager.default.removeItem(at: directory)
+			try? directory.delete()
 		}
 
 		let data = Data("Test".utf8)
@@ -334,5 +829,222 @@ struct Tests {
 		#expect(neverOffset == 0)
 		#expect(foreverOffset == 0.4)
 		#expect(countOffset == 0.4)
+	}
+
+	@Test
+	func gifDurationUsesTimeRangeAndBounceSetting() {
+		// GIF conversion uses bounced duration, while MP4 export asks for the source direction only.
+		let bouncing = conversion(timeRange: 1...3, bounce: true)
+
+		#expect(bouncing.gifDuration(assetTimeRange: nil) == .seconds(4))
+		#expect(bouncing.gifDuration(assetTimeRange: nil, withBounce: false) == .seconds(2))
+
+		let nonBouncing = conversion(timeRange: 1...3, bounce: false)
+
+		#expect(nonBouncing.gifDuration(assetTimeRange: nil) == .seconds(2))
+	}
+
+	@Test
+	func gifDurationFallsBackToAssetTimeRange() {
+		// Immediate convert/export can rely on the player-reported asset range before the user has trimmed.
+		let conversion = conversion()
+		let assetTimeRange = CMTimeRange(
+			start: .init(seconds: 2, preferredTimescale: .video),
+			end: .init(seconds: 7, preferredTimescale: .video)
+		)
+
+		#expect(conversion.gifDuration(assetTimeRange: assetTimeRange) == .seconds(5))
+	}
+
+	@Test
+	func closedRangeTranslationScalesBetweenTimelines() {
+		#expect((2.0...4.0).translated(from: 0...10, to: 0...5) == 1...2)
+		#expect((0.0...5.0).translated(from: 0...7.5, to: 10...25) == 10...20)
+		#expect((12.0...16.0).translated(from: 10...20, to: 100...200) == 120...160)
+	}
+
+	@Test
+	func closedRangeTranslationClampsToTargetTimeline() {
+		#expect((-1.0...12.0).translated(from: 0...10, to: 100...110) == 100...110)
+		#expect((3.0...4.0).translated(from: 2...2, to: 10...20) == 10...10)
+		// Partial upper-bound overflow: only the upper bound clips.
+		#expect((2.0...8.0).translated(from: 0...6, to: 0...10) == (10.0 / 3)...10)
+	}
+
+	@Test
+	func closedRangeTranslationPreservesIdentity() {
+		#expect((2.0...8.0).translated(from: 0...10, to: 0...10) == 2...8)
+	}
+
+	@Test
+	func closedRangeClampingBoundsClampsToRange() {
+		#expect((-1.0...12.0).clampingBounds(to: 0...10) == 0...10)
+		#expect((3.0...7.0).clampingBounds(to: 0...10) == 3...7)
+		#expect((5.0...15.0).clampingBounds(to: 0...10) == 5...10)
+	}
+
+	@Test
+	func cropRectConvertsFromRotatedSpaceToNaturalVideoSpace() {
+		let conversion = conversion(
+			crop: .init(
+				x: 0.25,
+				y: 0.125,
+				width: 0.5,
+				height: 0.75
+			)
+		)
+		let cropRect = conversion.cropRectInNaturalSpace(
+			naturalSize: .init(
+				width: 1920,
+				height: 1080
+			),
+			preferredTransform: .init(
+				a: 0,
+				b: 1,
+				c: -1,
+				d: 0,
+				tx: 1080,
+				ty: 0
+			)
+		)
+
+		#expect(cropRect == .init(
+			x: 240,
+			y: 270,
+			width: 1440,
+			height: 540
+		))
+	}
+
+	@Test
+	func cropRectInNaturalSpaceKeepsIdentityTransformCoordinates() {
+		let conversion = conversion(
+			crop: .init(
+				x: 0.1,
+				y: 0.2,
+				width: 0.3,
+				height: 0.4
+			)
+		)
+		let cropRect = conversion.cropRectInNaturalSpace(
+			naturalSize: .init(
+				width: 1000,
+				height: 500
+			),
+			preferredTransform: .identity
+		)
+
+		#expect(cropRect == .init(
+			x: 100,
+			y: 100,
+			width: 300,
+			height: 200
+		))
+	}
+
+	@Test
+	func cropRectInNaturalSpaceUsesFullFrameWhenCropIsNil() {
+		// Nil crop is the fast no-crop path, but geometry queries should still resolve it as the full frame.
+		let conversion = conversion()
+		let cropRect = conversion.cropRectInNaturalSpace(
+			naturalSize: .init(
+				width: 1920,
+				height: 1080
+			),
+			preferredTransform: .identity
+		)
+
+		#expect(cropRect == .init(
+			x: 0,
+			y: 0,
+			width: 1920,
+			height: 1080
+		))
+	}
+
+	@Test
+	func `deinit during encode cleanup does not crash`() async throws {
+		var gifski: Gifski? = try Gifski(
+			dimensions: (width: 1, height: 1),
+			quality: 1,
+			loop: .never,
+			fast: true
+		)
+		let gifskiReference: LockedGifskiReference
+		var wrapper: GifskiWrapper?
+		weak var weakGifski: Gifski?
+
+		do {
+			let concreteGifski = try #require(gifski)
+			gifskiReference = LockedGifskiReference(concreteGifski)
+			weakGifski = concreteGifski
+			wrapper = try #require(Mirror(reflecting: concreteGifski).descendant("wrapper", "some") as? GifskiWrapper)
+		}
+		weak let weakWrapper = wrapper
+
+		wrapper?.setWriteCallback { _, _ in
+			gifskiReference.gifski = nil
+			return 0
+		}
+
+		gifski = nil
+
+		for frameNumber in 0..<20 {
+			guard weakGifski != nil else {
+				break
+			}
+
+			try wrapper?.addFrame(
+				pixelFormat: .rgba,
+				frameNumber: frameNumber,
+				width: 1,
+				height: 1,
+				bytesPerRow: 4,
+				pixels: [UInt8(frameNumber), 0, 0, 255],
+				presentationTimestamp: Double(frameNumber) / 10
+			)
+		}
+		wrapper = nil
+
+		var didFinishCleanup = false
+
+		for _ in 0..<40 {
+			if weakGifski == nil, weakWrapper == nil {
+				didFinishCleanup = true
+				break
+			}
+
+			try await Task.sleep(for: .milliseconds(50))
+		}
+
+		#expect(didFinishCleanup)
+	}
+}
+
+private final class LockedGifskiReference: @unchecked Sendable {
+	private let lock = NSLock()
+	private var _gifski: Gifski?
+
+	init(_ gifski: Gifski) {
+		self._gifski = gifski
+	}
+
+	var gifski: Gifski? {
+		get {
+			lock.lock()
+			defer {
+				lock.unlock()
+			}
+
+			return _gifski
+		}
+		set {
+			lock.lock()
+			defer {
+				lock.unlock()
+			}
+
+			_gifski = newValue
+		}
 	}
 }

@@ -26,7 +26,7 @@ extension CropSettings {
 	/**
 	Returns the unnormalized crop rect for an image that is already in the preferred transform space (i.e., already rotated).
 
-	Since `AVAssetImageGenerator.appliesPreferredTrackTransform = true` and the preview manually applies the transform, images are always pre-rotated. The crop rect (which is defined in rotated space via the UI) can be applied directly.
+	The preview manually applies the preferred transform before using this helper, so the crop rect from the UI can be applied directly.
 	*/
 	func unnormalizedCropRect(sizeInPreferredTransformationSpace preferredSize: CGSize) -> CGRect {
 		guard let cropRect = crop else {

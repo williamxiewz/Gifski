@@ -791,7 +791,7 @@ extension AVAssetTrack {
 
 		guard
 			let track = composition.addMutableTrack(withMediaType: mediaType, preferredTrackID: kCMPersistentTrackID_Invalid),
-			(try? track.insertTimeRange(CMTimeRange(start: .zero, duration: timeRange.duration), of: self, at: .zero)) != nil
+			(try? track.insertTimeRange(timeRange, of: self, at: .zero)) != nil
 		else {
 			return nil
 		}
@@ -2834,6 +2834,28 @@ extension ClosedRange<Double> {
 		}
 
 		return self
+	}
+
+	/**
+	Clamp both bounds of the range independently to another range.
+	*/
+	func clampingBounds(to range: Self) -> Self {
+		lowerBound.clamped(to: range)...upperBound.clamped(to: range)
+	}
+
+	/**
+	Translate the range from one timeline to another while preserving the same relative selection.
+	*/
+	func translated(
+		from oldRange: Self,
+		to newRange: Self
+	) -> Self {
+		guard oldRange.length != 0 else {
+			return clampingBounds(to: newRange)
+		}
+
+		let scale = newRange.length / oldRange.length
+		return ((self - oldRange.lowerBound) * scale + newRange.lowerBound).clampingBounds(to: newRange)
 	}
 }
 
@@ -5043,6 +5065,13 @@ extension Data {
 
 
 extension URL {
+	/**
+	Delete the file or directory at this URL.
+	*/
+	func delete() throws {
+		try FileManager.default.removeItem(at: self)
+	}
+
 	/**
 	Creates a unique temporary directory and returns the URL.
 

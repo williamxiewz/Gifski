@@ -15,13 +15,11 @@ final class PreviewableComposition: AVMutableComposition {
 	init(extractPreviewableCompositionFrom asset: AVAsset) async throws {
 		super.init()
 
-		let (assetTracks, duration) = try await asset.load(.tracks, .duration)
-
-		guard let assetTrack = assetTracks.first else {
+		guard let assetTrack = try await asset.firstVideoTrack else {
 			throw Error.assetHasNoTracks
 		}
 
-		let (trackSize, frameDuration, preferredTransform) = try await assetTrack.load(.naturalSize, .minFrameDuration, .preferredTransform)
+		let (trackSize, frameDuration, preferredTransform, timeRange) = try await assetTrack.load(.naturalSize, .minFrameDuration, .preferredTransform, .timeRange)
 
 		guard
 			let compositionOriginalTrack = addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
@@ -30,8 +28,9 @@ final class PreviewableComposition: AVMutableComposition {
 		}
 		compositionOriginalTrack.preferredTransform = preferredTransform
 
+		// Insert the source track range at zero so preview playback, trimming, and full-preview indexing all use the same normalized timeline.
 		try compositionOriginalTrack.insertTimeRange(
-			CMTimeRange(start: .videoZero, duration: duration),
+			timeRange,
 			of: assetTrack,
 			at: .videoZero
 		)
@@ -39,12 +38,12 @@ final class PreviewableComposition: AVMutableComposition {
 		// Render size in preferred space (rotated) so preview displays correctly.
 		let rotatedRect = CGRect(origin: .zero, size: trackSize).applying(preferredTransform)
 		let renderSize = CGSize(width: abs(rotatedRect.width), height: abs(rotatedRect.height))
-		let timeRange = CMTimeRange(start: .videoZero, duration: duration)
+		let instructionTimeRange = CMTimeRange(start: .videoZero, duration: timeRange.duration)
 
 		let layerConfig = AVVideoCompositionLayerInstruction.Configuration(assetTrack: compositionOriginalTrack)
 		let instructionConfig = AVVideoCompositionInstruction.Configuration(
 			layerInstructions: [AVVideoCompositionLayerInstruction(configuration: layerConfig)],
-			timeRange: timeRange
+			timeRange: instructionTimeRange
 		)
 		let config = AVVideoComposition.Configuration(
 			customVideoCompositorClass: PreviewVideoCompositor.self,

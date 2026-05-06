@@ -86,7 +86,14 @@ final class Gifski {
 	}
 
 	deinit {
-		_ = try? wrapper?.finish()
+		guard let wrapper else {
+			return
+		}
+
+		// Deinit is only cleanup. Finish on another thread so a release from libgifski's writer thread cannot make Rust join itself.
+		Thread.detachNewThread {
+			_ = try? wrapper.finish()
+		}
 	}
 
 	func addFrame(

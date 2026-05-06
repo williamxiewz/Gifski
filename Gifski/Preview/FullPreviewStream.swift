@@ -51,7 +51,7 @@ actor FullPreviewStream {
 	*/
 	func requestNewFullPreview(
 		asset: sending AVAsset,
-		settingsEvent newSettings: SettingsForFullPreview,
+		settings newSettings: SettingsForFullPreview,
 		requestID: Int
 	) async {
 		automaticRequestID = max(automaticRequestID, requestID)
@@ -125,10 +125,15 @@ actor FullPreviewStream {
 		asset: AVAsset,
 		newSettings: SettingsForFullPreview
 	) -> ProgressableTask<Double, [SendableTexture?]> {
-		GIFGenerator.runProgressable(newSettings.conversion.toConversion(asset: asset))
-			.then(progressWeight: 0.67) {
-				try await PreviewRenderer.shared.convertAnimatedGIFToTextures(gifData: $0)
-			}
+		GIFGenerator.runProgressable(
+			newSettings.conversion.toConversion(
+				asset: asset,
+				frameRate: newSettings.frameRate
+			)
+		)
+		.then(progressWeight: 0.67) {
+			try await PreviewRenderer.shared.convertAnimatedGIFToTextures(gifData: $0)
+		}
 	}
 
 	/**
@@ -166,7 +171,7 @@ actor FullPreviewStream {
 
 extension Int {
 	/**
-	For debugging `createPreviewStream`.
+	For debugging full preview request decisions.
 	*/
 	func p(_ message: String) {
 		#if DEBUG

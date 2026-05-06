@@ -376,7 +376,7 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 		let videoURL = try video.writeToUniqueTemporaryFile()
 
 		defer {
-			try? FileManager.default.removeItem(at: videoURL)
+			try? videoURL.delete()
 		}
 
 		let data = try await generateGIF(videoURL: videoURL)
@@ -393,7 +393,12 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 		let (videoAsset, metadata) = try await VideoValidator.validate(videoURL)
 
 		guard !isPreview else {
-			guard let frame = try await videoAsset.image(at: .init(seconds: metadata.duration.toTimeInterval / 3.0, preferredTimescale: .video)) else {
+			guard let firstVideoTrackTimeRange = try await videoAsset.firstVideoTrack?.load(.timeRange) else {
+				throw "Could not read the video track from the source video.".toError
+			}
+
+			let previewTime = firstVideoTrackTimeRange.start + CMTime(seconds: firstVideoTrackTimeRange.duration.seconds / 3.0, preferredTimescale: .video)
+			guard let frame = try await videoAsset.image(at: previewTime) else {
 				throw "Could not generate a preview image from the source video.".toError
 			}
 			return try await GIFGenerator.convertOneFrame(
@@ -410,7 +415,7 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 			try conversionSettings(
 				videoAsset: videoAsset,
 				videoURL: videoURL,
-				metaDataDimensions: metadata.dimensions
+				metadataDimensions: metadata.dimensions
 			)
 		) { fractionCompleted in
 			progress.completedUnitCount = .init(fractionCompleted * 100)
@@ -420,9 +425,9 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 	private func conversionSettings(
 		videoAsset: AVAsset,
 		videoURL: URL,
-		metaDataDimensions: CGSize
+		metadataDimensions: CGSize
 	) async throws -> GIFGenerator.Conversion {
-		let dimensions = dimensions(metadataDimensions: metaDataDimensions)
+		let dimensions = dimensions(metadataDimensions: metadataDimensions)
 
 		return GIFGenerator.Conversion(
 			asset: videoAsset,
@@ -433,7 +438,7 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 			frameRate: frameRate,
 			loop: loop ? .forever : .never,
 			bounce: bounce,
-			crop: try crop?.cropRect(forDimensions: dimensions ?? metaDataDimensions.toInt),
+			crop: try crop?.cropRect(forDimensions: dimensions ?? metadataDimensions.toInt),
 			trackPreferredTransform: try? await videoAsset.firstVideoTrack?.load(.preferredTransform)
 		)
 	}

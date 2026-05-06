@@ -127,6 +127,20 @@ enum VideoValidator {
 			)
 		}
 
+		func metadataPreservingOriginalAudioFlag(for videoAsset: AVAsset) async throws -> AVAsset.VideoMetadata {
+			guard var videoMetadata = try await videoAsset.videoMetadata else {
+				throw NSError.appError(
+					"Could not read the video.",
+					recoverySuggestion: "This should not happen. Email sindresorhus@gmail.com and include this info:\n\n\(try await videoAsset.debugInfo)"
+				)
+			}
+
+			videoMetadata.hasAudio = oldVideoMetadata.hasAudio
+
+			// The working asset intentionally drops audio, but the UI still needs to warn based on the original source.
+			return videoMetadata
+		}
+
 		guard
 			let dimensions = try await asset.dimensions,
 			dimensions.width >= 4,
@@ -138,25 +152,19 @@ enum VideoValidator {
 			)
 		}
 
-		// We extract the video track into a new asset to remove the audio and to prevent problems if the video track duration is shorter than the total asset duration. If we don't do this, the video will show as black in the trim view at the duration where there's no video track, and it will confuse users. Also, if the user trims the video to just the black no video track part, the conversion would continue, but there's nothing to convert, so it would be stuck at 0%.
-		guard
-			let newAsset = try await firstVideoTrack.extractToNewAsset(),
-			var newVideoMetadata = try await newAsset.videoMetadata
-		else {
+		// Rewrap the video track to remove audio and keep the working asset duration aligned with the video track. Otherwise, videos with longer container durations can show black trim regions after the track ends and conversions can stall at 0% if the user trims to that empty range.
+		guard let newAsset = try await firstVideoTrack.extractToNewAsset() else {
 			throw NSError.appError(
 				"Could not read the video.",
 				recoverySuggestion: "This should not happen. Email sindresorhus@gmail.com and include this info:\n\n\(try await asset.debugInfo)"
 			)
 		}
+		let newVideoMetadata = try await metadataPreservingOriginalAudioFlag(for: newAsset)
 
-		newVideoMetadata.hasAudio = oldVideoMetadata.hasAudio
-
-		// Trim asset
+		let trimmedAsset: AVAsset
 		do {
-			let trimmedAsset = try await newAsset.trimmingBlankFramesFromFirstVideoTrack()
-			return (trimmedAsset, newVideoMetadata)
+			trimmedAsset = try await newAsset.trimmingBlankFramesFromFirstVideoTrack()
 		} catch AVAssetTrack.VideoTrimmingError.codecNotSupported {
-			// Allow user to continue
 			return (newAsset, newVideoMetadata)
 		} catch {
 			throw NSError.appError(
@@ -164,5 +172,9 @@ enum VideoValidator {
 				recoverySuggestion: "\(error.localizedDescription)\n\nThis should not happen. Email sindresorhus@gmail.com and include this info:\n\n\(try await newAsset.debugInfo)"
 			)
 		}
+
+		let trimmedVideoMetadata = try await metadataPreservingOriginalAudioFlag(for: trimmedAsset)
+
+		return (trimmedAsset, trimmedVideoMetadata)
 	}
 }
