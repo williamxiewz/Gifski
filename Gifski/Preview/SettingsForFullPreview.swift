@@ -77,7 +77,7 @@ struct SettingsForFullPreview: Equatable, Sendable {
 		return oldTimeRange.contains(newTimeRange)
 	}
 
-	struct SendableConversion: ReflectiveHashable, Sendable, CropSettings {
+	struct SendableConversion: ReflectiveHashable, Sendable {
 		let timeRange: ClosedRange<Double>?
 		let settings: ConversionSettings
 

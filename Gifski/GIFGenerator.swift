@@ -55,7 +55,7 @@ actor GIFGenerator {
 		onProgress: @escaping (Double) -> Void
 	) async throws -> Data {
 		gifski = try Gifski(
-			dimensions: conversion.croppedOutputDimensions,
+			dimensions: conversion.dimensions,
 			quality: conversion.quality.clamped(to: 0.1...1),
 			loop: conversion.loop
 		)
@@ -633,10 +633,11 @@ extension GIFGenerator.Conversion {
 		guard trackDimensions > 0 else {
 			throw Error.invalidDimensions
 		}
-		guard let dimensions = dimensionsAsCGSize else {
+		guard let dimensionsAsCGSize else {
 			return .one
 		}
-		let scale = dimensions / trackDimensions
+
+		let scale = uncroppedRenderSize(forOutputSize: dimensionsAsCGSize) / trackDimensions
 		guard scale > 0 else {
 			throw Error.invalidScale
 		}
@@ -650,7 +651,7 @@ extension GIFGenerator.Conversion {
 	}
 
 	/**
-	The size of the output render without taking crop into account.
+	The full render size, accounting for crop (scaled up so that the crop region yields the requested output size).
 	*/
 	var renderSize: CGSize {
 		get async throws {
@@ -667,7 +668,7 @@ extension GIFGenerator.Conversion {
 	*/
 	func renderSize(for videoTrack: AVAssetTrack) async throws -> CGSize {
 		if let dimensionsAsCGSize {
-			return dimensionsAsCGSize
+			return uncroppedRenderSize(forOutputSize: dimensionsAsCGSize)
 		}
 
 		guard let trackSize = try await videoTrack.dimensions else {
@@ -675,6 +676,24 @@ extension GIFGenerator.Conversion {
 		}
 
 		return trackSize
+	}
+
+	/**
+	Returns the full render size before crop for the requested final output size.
+	*/
+	func uncroppedRenderSize(forOutputSize outputSize: CGSize) -> CGSize {
+		guard
+			let crop,
+			crop.width > 0,
+			crop.height > 0
+		else {
+			return outputSize
+		}
+
+		return CGSize(
+			width: outputSize.width / crop.width,
+			height: outputSize.height / crop.height
+		)
 	}
 
 	/**
@@ -727,7 +746,7 @@ extension GIFGenerator.Conversion {
 		frameDuration: CMTime
 	) async throws -> AVVideoComposition {
 		let geometryTrack = geometryTrack ?? videoTrack
-		let outputRenderSize = unnormalizedCropRect(sizeInPreferredTransformationSpace: try await renderSize(for: geometryTrack)).size
+		let outputRenderSize = (crop ?? .initial).unnormalize(forDimensions: try await renderSize(for: geometryTrack)).size
 		// Layer instructions operate in natural space (unrotated). The crop rect from UI is in preferred space, so transform it back to natural space before applying it.
 		let (naturalSize, loadedPreferredTransform) = try await geometryTrack.load(.naturalSize, .preferredTransform)
 		let preferredTransform = trackPreferredTransform ?? loadedPreferredTransform
@@ -795,7 +814,6 @@ extension GIFGenerator {
 		case generateFrameFailed(Swift.Error)
 		case addFrameFailed(Swift.Error)
 		case writeFailed(Swift.Error)
-		case cropNotInBounds
 		case cancelled
 
 		var errorDescription: String? {
@@ -816,8 +834,6 @@ extension GIFGenerator {
 				"Failed to add frame, with underlying error: \(error.localizedDescription)"
 			case .writeFailed(let error):
 				"Failed to write, with underlying error: \(error.localizedDescription)"
-			case .cropNotInBounds:
-				"The crop is not in bounds of the video."
 			case .cancelled:
 				"The conversion was cancelled."
 			}

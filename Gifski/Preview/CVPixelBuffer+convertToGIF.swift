@@ -29,15 +29,11 @@ extension CVPixelBuffer {
 			throw ConvertToGIFError.failedToCreateCGContext
 		}
 
-		guard
-			let croppedImage = settings.conversion.croppedImage(image: cgImage)
-		else {
-			throw GIFGenerator.Error.cropNotInBounds
-		}
+		let croppedImage = try settings.conversion.crop?.croppingImage(cgImage) ?? cgImage
 
 		return try await GIFGenerator.convertOneFrame(
 			frame: croppedImage,
-			dimensions: settings.conversion.croppedOutputDimensions,
+			dimensions: settings.conversion.dimensions,
 			quality: max(0.1, settings.conversion.settings.quality),
 			fast: true
 		)

@@ -391,6 +391,7 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 
 	private func generateGIF(videoURL: URL) async throws -> Data {
 		let (videoAsset, metadata) = try await VideoValidator.validate(videoURL)
+		let outputSettings = try outputSettings(metadataDimensions: metadata.dimensions)
 
 		guard !isPreview else {
 			guard let firstVideoTrackTimeRange = try await videoAsset.firstVideoTrack?.load(.timeRange) else {
@@ -401,9 +402,10 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 			guard let frame = try await videoAsset.image(at: previewTime) else {
 				throw "Could not generate a preview image from the source video.".toError
 			}
+			let croppedFrame = try outputSettings.cropRect?.croppingImage(frame) ?? frame
 			return try await GIFGenerator.convertOneFrame(
-				frame: frame,
-				dimensions: dimensions(metadataDimensions: metadata.dimensions),
+				frame: croppedFrame,
+				dimensions: outputSettings.dimensions,
 				quality: quality
 			)
 		}
@@ -415,7 +417,7 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 			try conversionSettings(
 				videoAsset: videoAsset,
 				videoURL: videoURL,
-				metadataDimensions: metadata.dimensions
+				outputSettings: outputSettings
 			)
 		) { fractionCompleted in
 			progress.completedUnitCount = .init(fractionCompleted * 100)
@@ -425,26 +427,37 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 	private func conversionSettings(
 		videoAsset: AVAsset,
 		videoURL: URL,
-		metadataDimensions: CGSize
+		outputSettings: (cropRect: CropRect?, dimensions: (width: Int, height: Int)?)
 	) async throws -> GIFGenerator.Conversion {
-		let dimensions = dimensions(metadataDimensions: metadataDimensions)
-
-		return GIFGenerator.Conversion(
+		GIFGenerator.Conversion(
 			asset: videoAsset,
 			sourceURL: videoURL,
 			timeRange: nil,
 			quality: quality,
-			dimensions: dimensions,
+			dimensions: outputSettings.dimensions,
 			frameRate: frameRate,
 			loop: loop ? .forever : .never,
 			bounce: bounce,
-			crop: try crop?.cropRect(forDimensions: dimensions ?? metadataDimensions.toInt),
+			crop: outputSettings.cropRect,
 			trackPreferredTransform: try? await videoAsset.firstVideoTrack?.load(.preferredTransform)
 		)
 	}
 
-	private func dimensions(metadataDimensions dimensions: CGSize) -> (Int, Int)? {
-		let result: (Int, Int)?
+	/**
+	Returns crop and dimensions settings using the cropped output area as the dimensions reference.
+	*/
+	func outputSettings(metadataDimensions: CGSize) throws -> (cropRect: CropRect?, dimensions: (width: Int, height: Int)?) {
+		let cropRect = try crop?.cropRect(forDimensions: metadataDimensions.toInt)
+		let outputReferenceDimensions = cropRect?.croppedSize(forDimensions: metadataDimensions) ?? metadataDimensions
+
+		return (
+			cropRect,
+			dimensions(referenceDimensions: outputReferenceDimensions)
+		)
+	}
+
+	private func dimensions(referenceDimensions dimensions: CGSize) -> (width: Int, height: Int)? {
+		let result: (width: Int, height: Int)?
 
 		switch dimensionsType {
 		case .pixels:
@@ -458,8 +471,8 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 			)
 
 			result = (
-				Int(size.width.rounded()),
-				Int(size.height.rounded())
+				width: Int(size.width.rounded()),
+				height: Int(size.height.rounded())
 			)
 		case .percent:
 			guard let dimensionsPercent else {
@@ -469,16 +482,16 @@ struct ConvertIntent: AppIntent, ProgressReportingIntent {
 			let factor = dimensionsPercent / 100
 
 			result = (
-				Int((dimensions.width * factor).rounded()),
-				Int((dimensions.height * factor).rounded())
+				width: Int((dimensions.width * factor).rounded()),
+				height: Int((dimensions.height * factor).rounded())
 			)
 		}
 
 		// Ensure we don't return invalid zero dimensions.
 		guard
 			let result,
-			result.0 > 0,
-			result.1 > 0
+			result.width > 0,
+			result.height > 0
 		else {
 			assertionFailure("Calculated dimensions resulted in zero or negative values")
 			return nil

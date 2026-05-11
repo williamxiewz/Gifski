@@ -81,7 +81,7 @@ extension CropRect {
 	}
 
 	var isReset: Bool {
-		origin.x == 0 && origin.y == 0 && size.width == 1 && size.height == 1
+		self == .initial
 	}
 
 	/**
@@ -98,6 +98,28 @@ extension CropRect {
 
 	func unnormalize(forDimensions dimensions: (Int, Int)) -> CGRect {
 		unnormalize(forDimensions: .init(width: Double(dimensions.0), height: Double(dimensions.1)))
+	}
+
+	/**
+	Returns the crop area size in pixels.
+	*/
+	func croppedSize(forDimensions dimensions: CGSize) -> CGSize {
+		// Uses `Int()` truncation to match `videoSizeDescription` so the crop overlay and dimensions dropdown agree.
+		let rect = unnormalize(forDimensions: dimensions)
+		return CGSize(width: Int(rect.width), height: Int(rect.height))
+	}
+
+	/**
+	Returns the image cropped to this rect, throwing if the crop area is outside the image bounds.
+	*/
+	func croppingImage(_ image: CGImage) throws -> CGImage {
+		let pixelRect = unnormalize(forDimensions: image.size)
+
+		guard let result = image.cropping(to: pixelRect.integral) else {
+			throw CropError.cropNotInBounds
+		}
+
+		return result
 	}
 
 	/**
@@ -624,6 +646,12 @@ extension CropRect {
 			width: newWidth,
 			height: newHeight
 		)
+	}
+}
+
+extension CropRect {
+	enum CropError: Error {
+		case cropNotInBounds
 	}
 }
 

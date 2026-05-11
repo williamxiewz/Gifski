@@ -60,7 +60,7 @@ private struct _EditScreen: View {
 	@State private var backgroundWorkRequestID = 0
 
 	@Binding private var outputCropRect: CropRect
-	@State private var savedCropRect: CropRect?
+	@State private var savedCropEditState: (cropRect: CropRect, resizableDimensions: Dimensions)?
 	@State private var exportModifiedVideoState = ExportModifiedVideoState.idle
 	@State private var isExportModifiedVideoAudioWarningPresented = false
 	private var overlay: NSView
@@ -235,9 +235,11 @@ private struct _EditScreen: View {
 	}
 
 	private func cancelCropMode() {
-		if let savedCropRect {
-			outputCropRect = savedCropRect
+		if let savedCropEditState {
+			outputCropRect = savedCropEditState.cropRect
+			resizableDimensions = savedCropEditState.resizableDimensions
 		}
+
 		appState.mode = .normal
 	}
 
@@ -497,16 +499,23 @@ private struct _EditScreen: View {
 		}
 		.onChange(of: appState.mode) {
 			if appState.mode == .editCrop {
-				savedCropRect = outputCropRect
+				// Crop edits can shrink `resizableDimensions` live through `croppedMaximumSize`, so cancel needs to restore both pieces of edit-session state.
+				savedCropEditState = (outputCropRect, resizableDimensions)
+
 				Task {
 					await fullPreviewStream.cancelFullPreviewGeneration()
 				}
 			} else {
-				savedCropRect = nil
-			}
+				let didFinishCropEdit = savedCropEditState != nil
+				savedCropEditState = nil
 
-			// Because we don't update the preview during editCrop, the preview may be stale.
-			updatePreviewOnSettingsChange()
+				if didFinishCropEdit {
+					// Crop mode edits are a draft session. Refresh estimate and preview once after accepting or cancelling instead of during every crop drag.
+					updateBackgroundWorkOnSettingsChange()
+				} else {
+					updatePreviewOnSettingsChange()
+				}
+			}
 		}
 	}
 
@@ -514,7 +523,7 @@ private struct _EditScreen: View {
 		HStack(spacing: 0) {
 			Form {
 				DimensionsSetting(
-					videoDimensions: metadata.dimensions,
+					maximumDimensions: croppedMaximumSize,
 					resizableDimensions: $resizableDimensions
 				)
 				SpeedSetting()
@@ -566,6 +575,14 @@ private struct _EditScreen: View {
 	private var hasEnoughFrames: Bool {
 		let duration = conversionSettings.gifDuration(assetTimeRange: modifiedAssetTimeRange, withBounce: false)
 		return Int(duration.toTimeInterval * Double(effectiveFrameRate)) >= 2
+	}
+
+	private var croppedMaximumSize: CGSize {
+		guard !outputCropRect.isReset else {
+			return metadata.dimensions
+		}
+
+		return outputCropRect.croppedSize(forDimensions: metadata.dimensions)
 	}
 
 	private func convert(skipLargeGIFWarning: Bool = false) {
@@ -739,7 +756,7 @@ private struct DimensionsSetting: View {
 	@State private var isSynchronizingTextFields = false
 	@State private var isArrowKeyTipPresented = false
 
-	let videoDimensions: CGSize
+	let maximumDimensions: CGSize
 	@Binding var resizableDimensions: Dimensions // TODO: Rename.
 
 	var body: some View {
@@ -878,13 +895,19 @@ private struct DimensionsSetting: View {
 			updateTextFieldsForCurrentDimensions()
 			showArrowKeyTipIfNeeded()
 		}
+		.onChange(of: maximumDimensions) {
+			updateMaximumDimensions()
+		}
 	}
 
 	private func setUpDimensions() {
-		let dimensions = Dimensions.pixels(videoDimensions, originalSize: videoDimensions)
+		let dimensions = Dimensions.pixels(maximumDimensions, originalSize: maximumDimensions)
 
 		resizableDimensions = dimensions
+		updatePredefinedDimensions()
+	}
 
+	private func updatePredefinedDimensions() {
 		var pixelCommonSizes: [Double] = [
 			960,
 			800,
@@ -900,22 +923,22 @@ private struct DimensionsSetting: View {
 			64
 		]
 
-		if !pixelCommonSizes.contains(dimensions.pixels.width) {
-			pixelCommonSizes.append(dimensions.pixels.width)
+		if !pixelCommonSizes.contains(maximumDimensions.width) {
+			pixelCommonSizes.append(maximumDimensions.width)
 			pixelCommonSizes.sort(by: >)
 		}
 
 		let pixelDimensions = pixelCommonSizes.map { width in
-			let ratio = width / dimensions.pixels.width
-			let height = dimensions.pixels.height * ratio
+			let ratio = width / maximumDimensions.width
+			let height = maximumDimensions.height * ratio
 			return CGSize(width: width, height: height).rounded()
 		}
-		.filter { $0.width <= videoDimensions.width && $0.height <= videoDimensions.height }
+		.filter { $0.width <= maximumDimensions.width && $0.height <= maximumDimensions.height }
 
 		let predefinedPixelDimensions = pixelDimensions
 			// TODO
 //			.filter { resizableDimensions.validate(newSize: $0) }
-			.map { Dimensions.pixels($0, originalSize: videoDimensions) }
+			.map { Dimensions.pixels($0, originalSize: maximumDimensions) }
 
 		let percentCommonSizes: [Double] = [
 			100,
@@ -926,7 +949,7 @@ private struct DimensionsSetting: View {
 		]
 
 		let predefinedPercentDimensions = percentCommonSizes.map {
-			Dimensions.percent($0 / 100, originalSize: videoDimensions)
+			Dimensions.percent($0 / 100, originalSize: maximumDimensions)
 		}
 
 		self.predefinedPixelDimensions = predefinedPixelDimensions
@@ -995,9 +1018,15 @@ private struct DimensionsSetting: View {
 		}
 
 		let previousDimensions = resizableDimensions
-		resizableDimensions = .percent(percent.toDouble / 100, originalSize: videoDimensions)
+		resizableDimensions = .percent(percent.toDouble / 100, originalSize: maximumDimensions)
 		synchronizeTextFieldsWithCurrentDimensions()
 		selectPredefinedSizeBasedOnCurrentDimensions(forceCustom: previousDimensions != resizableDimensions)
+	}
+
+	private func updateMaximumDimensions() {
+		resizableDimensions = resizableDimensions.settingOriginalSize(maximumDimensions)
+		updatePredefinedDimensions()
+		updateTextFieldsForCurrentDimensions()
 	}
 
 	private func updateTextFieldsForCurrentDimensions() {

@@ -3,6 +3,7 @@ import CoreGraphics
 import ImageIO
 import Testing
 import UniformTypeIdentifiers
+import VideoToolbox
 @testable import Gifski
 
 struct Tests {
@@ -79,6 +80,22 @@ struct Tests {
 	}
 
 	private func makeTestVideo() async throws -> URL {
+		try await makeTestVideo(frameCount: 4) { frameNumber in
+			let color = UInt8(frameNumber * 60)
+			return try makePixelBuffer(red: color, green: 255 - color, blue: color / 2)
+		}
+	}
+
+	private func makeHorizontalSplitTestVideo() async throws -> URL {
+		try await makeTestVideo(frameCount: 3) { _ in
+			try makeHorizontalSplitPixelBuffer()
+		}
+	}
+
+	private func makeTestVideo(
+		frameCount: Int,
+		pixelBufferForFrame: (Int) throws -> CVPixelBuffer
+	) async throws -> URL {
 		let directory = try URL.uniqueTemporaryDirectory()
 		let outputURL = directory.appending(path: "test.mov")
 		let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
@@ -107,7 +124,7 @@ struct Tests {
 		try #require(writer.startWriting())
 		writer.startSession(atSourceTime: .zero)
 
-		for frameNumber in 0..<4 {
+		for frameNumber in 0..<frameCount {
 			for _ in 0..<100 {
 				guard !input.isReadyForMoreMediaData else {
 					break
@@ -119,8 +136,7 @@ struct Tests {
 			}
 			try #require(input.isReadyForMoreMediaData)
 
-			let color = UInt8(frameNumber * 60)
-			let pixelBuffer = try makePixelBuffer(red: color, green: 255 - color, blue: color / 2)
+			let pixelBuffer = try pixelBufferForFrame(frameNumber)
 			let presentationTime = CMTime(value: CMTimeValue(frameNumber), timescale: 2)
 			try #require(adaptor.append(pixelBuffer, withPresentationTime: presentationTime))
 		}
@@ -140,6 +156,19 @@ struct Tests {
 		green: UInt8,
 		blue: UInt8
 	) throws -> CVPixelBuffer {
+		try makePixelBuffer { _, _ in
+			(red, green, blue)
+		}
+	}
+
+	private func makeHorizontalSplitPixelBuffer() throws -> CVPixelBuffer {
+		try makePixelBuffer { x, width in
+			let red: UInt8 = x < width / 2 ? 255 : 0
+			return (red, 0, 0)
+		}
+	}
+
+	private func makePixelBuffer(pixelColor: (_ x: Int, _ totalWidth: Int) -> (red: UInt8, green: UInt8, blue: UInt8)) throws -> CVPixelBuffer {
 		var newPixelBuffer: CVPixelBuffer?
 		let status = CVPixelBufferCreate(
 			nil,
@@ -149,7 +178,7 @@ struct Tests {
 			nil,
 			&newPixelBuffer
 		)
-		#expect(status == kCVReturnSuccess)
+		try #require(status == kCVReturnSuccess)
 		let pixelBuffer = try #require(newPixelBuffer)
 
 		CVPixelBufferLockBaseAddress(pixelBuffer, [])
@@ -169,14 +198,23 @@ struct Tests {
 		for y in 0..<height {
 			for x in 0..<width {
 				let offset = (y * bytesPerRow) + (x * 4)
-				buffer[offset] = blue
-				buffer[offset + 1] = green
-				buffer[offset + 2] = red
+				let color = pixelColor(x, width)
+				buffer[offset] = color.blue
+				buffer[offset + 1] = color.green
+				buffer[offset + 2] = color.red
 				buffer[offset + 3] = 255
 			}
 		}
 
 		return pixelBuffer
+	}
+
+	private func makeHorizontalSplitCGImage() throws -> CGImage {
+		let pixelBuffer = try makeHorizontalSplitPixelBuffer()
+		var cgImage: CGImage?
+		let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
+		try #require(status == noErr)
+		return try #require(cgImage)
 	}
 
 	private func gifFrameCount(_ gifData: Data) throws -> Int {
@@ -444,7 +482,7 @@ struct Tests {
 		) { _ in }
 
 		#expect(data.starts(with: Data("GIF".utf8)))
-		#expect(try imageDimensions(gifData: data) == .init(width: 4, height: 4))
+		#expect(try imageDimensions(gifData: data) == .init(width: 8, height: 8))
 		#expect(try gifFrameCount(data) == 4)
 
 		let previousFrameRedValue = try averageRedValue(gifData: data, frameIndex: 2)
@@ -478,6 +516,47 @@ struct Tests {
 	}
 
 	@Test
+	func gifGenerationUsesSelectedCropRegion() async throws {
+		let videoURL = try await makeHorizontalSplitTestVideo()
+		defer {
+			try? videoURL.deletingLastPathComponent().delete()
+		}
+
+		let leftCropData = try await GIFGenerator.run(
+			.init(
+				asset: AVURLAsset(url: videoURL),
+				sourceURL: videoURL,
+				timeRange: 0...1,
+				quality: 0.8,
+				dimensions: (width: 8, height: 16),
+				frameRate: 2,
+				loop: .never,
+				bounce: false,
+				crop: .init(x: 0, y: 0, width: 0.5, height: 1)
+			)
+		) { _ in }
+
+		let rightCropData = try await GIFGenerator.run(
+			.init(
+				asset: AVURLAsset(url: videoURL),
+				sourceURL: videoURL,
+				timeRange: 0...1,
+				quality: 0.8,
+				dimensions: (width: 8, height: 16),
+				frameRate: 2,
+				loop: .never,
+				bounce: false,
+				crop: .init(x: 0.5, y: 0, width: 0.5, height: 1)
+			)
+		) { _ in }
+
+		#expect(try imageDimensions(gifData: leftCropData) == .init(width: 8, height: 16))
+		#expect(try imageDimensions(gifData: rightCropData) == .init(width: 8, height: 16))
+		#expect(try averageRedValue(gifData: leftCropData, frameIndex: 0) > 200)
+		#expect(try averageRedValue(gifData: rightCropData, frameIndex: 0) < 50)
+	}
+
+	@Test
 	func exportModifiedVideoCreatesMovieFromVideoAsset() async throws {
 		let videoURL = try await makeTestVideo()
 		defer {
@@ -503,7 +582,7 @@ struct Tests {
 
 		let asset = AVURLAsset(url: outputURL)
 		#expect(outputURL.exists)
-		#expect(try await asset.dimensions == .init(width: 4, height: 4))
+		#expect(try await asset.dimensions == .init(width: 8, height: 8))
 		#expect(try await asset.load(.duration).seconds > 0)
 	}
 
@@ -766,6 +845,199 @@ struct Tests {
 
 		let percentDimensions = Dimensions.percent(0.5, originalSize: originalSize)
 		#expect(!percentDimensions.percentFormatted.hasPrefix("~"))
+	}
+
+	@Test
+	func settingOriginalSizePreservesPixelValue() {
+		let dimensions = Dimensions.pixels(
+			CGSize(width: 800, height: 450),
+			originalSize: CGSize(width: 1920, height: 1080)
+		)
+
+		let croppedDimensions = dimensions.settingOriginalSize(CGSize(width: 1200, height: 675))
+
+		#expect(croppedDimensions.pixels == CGSize(width: 800, height: 450))
+		#expect(croppedDimensions.originalSize == CGSize(width: 1200, height: 675))
+	}
+
+	@Test
+	func settingOriginalSizeFitsOversizedPixels() {
+		let dimensions = Dimensions.pixels(
+			CGSize(width: 800, height: 450),
+			originalSize: CGSize(width: 1920, height: 1080)
+		)
+
+		let croppedDimensions = dimensions.settingOriginalSize(CGSize(width: 400, height: 400))
+
+		#expect(croppedDimensions.pixels == CGSize(width: 400, height: 400))
+		#expect(croppedDimensions.originalSize == CGSize(width: 400, height: 400))
+	}
+
+	@Test
+	func settingOriginalSizeRecomputesPixelAspectForNewOriginalSize() {
+		let dimensions = Dimensions.pixels(
+			CGSize(width: 800, height: 450),
+			originalSize: CGSize(width: 1920, height: 1080)
+		)
+
+		let croppedDimensions = dimensions.settingOriginalSize(CGSize(width: 1200, height: 1200))
+
+		#expect(croppedDimensions.pixels == CGSize(width: 800, height: 800))
+		#expect(croppedDimensions.originalSize == CGSize(width: 1200, height: 1200))
+	}
+
+	@Test
+	func settingOriginalSizePreservesPercentValue() {
+		let dimensions = Dimensions.percent(
+			0.5,
+			originalSize: CGSize(width: 1920, height: 1080)
+		)
+
+		let croppedDimensions = dimensions.settingOriginalSize(CGSize(width: 800, height: 600))
+
+		#expect(croppedDimensions.pixels == CGSize(width: 400, height: 300))
+		#expect(croppedDimensions.percent == 0.5)
+	}
+
+	@Test
+	func uncroppedRenderSizeScalesUpByInverseOfCropFraction() {
+		let conversion = conversion(
+			dimensions: (width: 400, height: 300),
+			crop: .init(x: 0.25, y: 0.25, width: 0.5, height: 0.75)
+		)
+
+		#expect(conversion.uncroppedRenderSize(forOutputSize: CGSize(width: 400, height: 300)) == CGSize(width: 800, height: 400))
+	}
+
+	@Test
+	func uncroppedRenderSizeWithNoCropReturnsOutputSize() {
+		let conversion = conversion(dimensions: (width: 400, height: 300))
+
+		#expect(conversion.uncroppedRenderSize(forOutputSize: CGSize(width: 400, height: 300)) == CGSize(width: 400, height: 300))
+	}
+
+	@Test
+	func appIntentOutputSettingsUseCropSizeForPercentDimensions() throws {
+		var crop = Crop_AppEntity()
+		crop.mode = .exact
+		crop.x = 20
+		crop.bottomLeftY = 30
+		crop.width = 400
+		crop.height = 300
+
+		var intent = ConvertIntent()
+		intent.dimensionsType = .percent
+		intent.dimensionsPercent = 50
+		intent.crop = crop
+
+		let settings = try intent.outputSettings(metadataDimensions: .init(width: 1920, height: 1080))
+
+		#expect(settings.dimensions?.width == 200)
+		#expect(settings.dimensions?.height == 150)
+	}
+
+	@Test
+	func appIntentOutputSettingsWithNoCropUsesFullDimensions() throws {
+		var intent = ConvertIntent()
+		intent.dimensionsType = .percent
+		intent.dimensionsPercent = 50
+		intent.crop = nil
+
+		let settings = try intent.outputSettings(metadataDimensions: .init(width: 1920, height: 1080))
+
+		#expect(settings.cropRect == nil)
+		#expect(settings.dimensions?.width == 960)
+		#expect(settings.dimensions?.height == 540)
+	}
+
+	@Test
+	func appIntentOutputSettingsUseCropSizeForPixelDimensions() throws {
+		var crop = Crop_AppEntity()
+		crop.mode = .exact
+		crop.x = 0
+		crop.bottomLeftY = 0
+		crop.width = 400
+		crop.height = 200
+
+		var intent = ConvertIntent()
+		intent.dimensionsType = .pixels
+		intent.dimensionsWidth = 200
+		intent.crop = crop
+
+		let settings = try intent.outputSettings(metadataDimensions: .init(width: 1920, height: 1080))
+
+		#expect(settings.dimensions?.width == 200)
+		#expect(settings.dimensions?.height == 100)
+	}
+
+	@Test
+	func croppedSizeWithInitialCropReturnsOriginalDimensions() {
+		let size = CropRect.initial.croppedSize(forDimensions: .init(width: 1920, height: 1080))
+
+		#expect(size.width == 1920)
+		#expect(size.height == 1080)
+	}
+
+	@Test
+	func croppedSizeReturnsCropAreaInPixels() {
+		let crop = CropRect(x: 0.25, y: 0.25, width: 0.5, height: 0.25)
+
+		#expect(crop.croppedSize(forDimensions: .init(width: 1920, height: 1080)) == .init(width: 960, height: 270))
+	}
+
+	@Test
+	func croppedSizeTruncatesFractionalPixels() {
+		let crop = CropRect(x: 1.0 / 3.0, y: 1.0 / 3.0, width: 1.0 / 3.0, height: 1.0 / 3.0)
+		let size = crop.croppedSize(forDimensions: .init(width: 100, height: 100))
+
+		#expect(size.width == 33)
+		#expect(size.height == 33)
+	}
+
+	@Test
+	func uncroppedRenderSizeWithInitialCropReturnsOutputSize() {
+		let conversion = conversion(
+			dimensions: (width: 400, height: 300),
+			crop: .initial
+		)
+
+		#expect(conversion.uncroppedRenderSize(forOutputSize: CGSize(width: 400, height: 300)) == CGSize(width: 400, height: 300))
+	}
+
+	@Test
+	func uncroppedRenderSizeWithZeroWidthCropReturnsOutputSize() {
+		let conversion = conversion(
+			dimensions: (width: 400, height: 300),
+			crop: .init(x: 0, y: 0, width: 0, height: 1)
+		)
+
+		#expect(conversion.uncroppedRenderSize(forOutputSize: CGSize(width: 400, height: 300)) == CGSize(width: 400, height: 300))
+	}
+
+	@Test
+	func croppingImageThrowsForOutOfBoundsCrop() throws {
+		let frame = try makeHorizontalSplitCGImage()
+		let cropRect = CropRect(x: 1, y: 1, width: 0.5, height: 0.5)
+
+		#expect(throws: CropRect.CropError.cropNotInBounds) {
+			try cropRect.croppingImage(frame)
+		}
+	}
+
+	@Test
+	func croppingImageCropsToSelectedRegion() async throws {
+		let frame = try makeHorizontalSplitCGImage()
+		let cropRect = CropRect(x: 0.5, y: 0, width: 0.5, height: 1)
+		let croppedFrame = try cropRect.croppingImage(frame)
+		let data = try await GIFGenerator.convertOneFrame(
+			frame: croppedFrame,
+			dimensions: (width: 8, height: 16),
+			quality: 0.8
+		)
+
+		#expect(croppedFrame.width == 8)
+		#expect(croppedFrame.height == 16)
+		#expect(try averageRedValue(gifData: data, frameIndex: 0) < 50)
 	}
 
 	@Test
