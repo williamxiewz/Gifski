@@ -41,25 +41,20 @@ struct MainScreen: View {
 		.border(isDropTargeted ? Color.accentColor : .clear, width: 5, cornerRadius: 10)
 		// Using `onDrop` with delegate instead of `.dropDestination` as it provides better UX with pre-drop validation feedback.
 		.onDrop(
-			of: appState.isConverting ? [] : [.fileURL],
+			of: appState.isConverting || appState.isOpeningVideo ? [] : [.fileURL],
 			delegate: AnyDropDelegate(
 				isTargeted: $isDropTargeted.animation(.easeInOut(duration: 0.2)),
 				onValidate: {
-					$0.hasFileURLsConforming(to: Device.supportedVideoTypes)
+					// Do not check movie type here. During hover, synchronous pasteboard type checks can fail for valid movie files, which prevents the drop highlight from appearing.
+					$0.hasFileURLs
 				},
 				onPerform: {
-					guard let itemProvider = $0.itemProviders(for: [.fileURL]).first else {
+					// Validate that the dropped file is a movie before `AppState.start(_:)` resets navigation for the new import.
+					guard let url = $0.firstMovieFileURL else {
 						return false
 					}
 
-					Task {
-						guard let url = await itemProvider.getURL() else {
-							return
-						}
-
-						appState.start(url)
-					}
-
+					appState.start(url)
 					return true
 				}
 			)

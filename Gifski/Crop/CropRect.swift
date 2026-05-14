@@ -251,6 +251,23 @@ extension CropRect {
 	}
 
 	/**
+	Returns an aspect-fitted size with each minimum side capped to the available side.
+	*/
+	private static func aspectSize(
+		aspectRatio: Double,
+		fittingIn maximumSize: CGSize
+	) -> CGSize {
+		let minimumWidth = min(minRectWidthHeight, maximumSize.width)
+		let minimumHeight = min(minRectWidthHeight, maximumSize.height)
+		let clampedAspectRatio = aspectRatio.clamped(
+			from: minimumWidth / maximumSize.height,
+			to: maximumSize.width / minimumHeight
+		)
+
+		return clampedAspectRatio.normalizedAspectRatioSides.aspectFit(to: maximumSize)
+	}
+
+	/**
 	Returns a new `CGRect` trying to expand or shrink the size. If the size is within the video bounds it will expand, otherwise it will change the center position and expand.
 	*/
 	func changeSize(size: UnitSize, minSize: UnitSize) -> Self {
@@ -300,7 +317,10 @@ extension CropRect {
 	static let minRectWidthHeight = 100.0
 
 	static func minSize(videoSize: CGSize) -> UnitSize {
-		.init(width: minRectWidthHeight / videoSize.width, height: minRectWidthHeight / videoSize.height)
+		.init(
+			width: min(minRectWidthHeight / videoSize.width, 1.0),
+			height: min(minRectWidthHeight / videoSize.height, 1.0)
+		)
 	}
 
 	/**
@@ -311,19 +331,10 @@ extension CropRect {
 		aspectHeight: Double,
 		forDimensions dimensions: CGSize
 	) -> CropRect {
-		let aspectSize = CGSize(width: aspectWidth, height: aspectHeight)
-
-		let fittedSize = aspectSize.aspectFittedSize(
-			targetWidth: dimensions.width,
-			targetHeight: dimensions.height
+		let newSize = Self.aspectSize(
+			aspectRatio: CGSize(width: aspectWidth, height: aspectHeight).aspectRatio,
+			fittingIn: dimensions
 		)
-
-		let newAspect = clampAspect(
-			aspectRatio: aspectSize.aspectRatio,
-			newLongestSide: fittedSize.longestSide
-		)
-
-		let newSize = newAspect * fittedSize.longestSide
 		let cropWidth = newSize.width / dimensions.width
 		let cropHeight = newSize.height / dimensions.height
 
@@ -352,33 +363,44 @@ extension CropRect {
 			return applyCenterDrag(delta: delta)
 		}
 
-		let minSize = CropRect.minSize(videoSize: dimensions)
+		let effectiveMinSize = effectiveMinSizeForDrag(videoSize: dimensions)
 
 		return switch dragMode {
 		case .normal:
 			applyNormal(
 				position: position,
-				minSize: minSize,
+				minSize: effectiveMinSize,
 				delta: delta
 			)
 		case .symmetric:
 			applySymmetric(
 				position: position,
-				minSize: minSize,
+				minSize: effectiveMinSize,
 				delta: delta
 			)
 		case .scale:
 			applyScale(
 				position: position,
-				minSize: minSize,
+				minSize: effectiveMinSize,
 				delta: delta
 			)
 		case .aspectRatioLockScale:
 			applyAspectRatioLock(
-				minSize: minSize,
+				minSize: effectiveMinSize,
 				dragLocation: drag.locationInside(frame: frame)
 			)
 		}
+	}
+
+	/**
+	Returns the minimum crop size used while dragging this crop rect.
+	*/
+	func effectiveMinSizeForDrag(videoSize dimensions: CGSize) -> UnitSize {
+		let minSize = CropRect.minSize(videoSize: dimensions)
+		return .init(
+			width: min(minSize.width, width),
+			height: min(minSize.height, height)
+		)
 	}
 
 	func getRelativeDragDelta(

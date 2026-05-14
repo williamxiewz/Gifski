@@ -25,7 +25,7 @@ struct AppMain: App {
 					appState.isFileImporterPresented = true
 				}
 				.keyboardShortcut("o")
-				.disabled(appState.isConverting)
+				.disabled(appState.isConverting || appState.isOpeningVideo)
 			}
 			CommandGroup(replacing: .importExport) {
 				Button("Export as Video…", systemImage: "square.and.arrow.up") {
@@ -71,6 +71,9 @@ struct AppMain: App {
 				RateOnAppStoreButton(appStoreID: "1351639930")
 				ShareAppButton(appStoreID: "1351639930")
 				Divider()
+				Button("Copy Logs", systemImage: "doc.on.clipboard") {
+					appState.copyDiagnosticLogs()
+				}
 				SendFeedbackButton()
 			}
 		}

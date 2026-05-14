@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreGraphics
 import ImageIO
+import SwiftUI
 import Testing
 import UniformTypeIdentifiers
 import VideoToolbox
@@ -283,6 +284,31 @@ struct Tests {
 	}
 
 	@Test
+	func keyframeInfoCancelsCompressedSampleReadOnExit() async throws {
+		let videoURL = try await makeTestVideo()
+		let asset = AVURLAsset(url: videoURL)
+		let track = try #require(try await asset.firstVideoTrack)
+
+		let info = try #require(try await track.keyframeInfo())
+
+		#expect(info.frameCount == 4)
+		#expect(info.keyframeCount > 0)
+	}
+
+	@Test
+	func blankFrameTrimmingCancelsCompressedSampleReadOnExit() async throws {
+		let videoURL = try await makeTestVideo()
+		let asset = AVURLAsset(url: videoURL)
+		let track = try #require(try await asset.firstVideoTrack)
+		let originalTimeRange = try await track.load(.timeRange)
+
+		let trimmedTrack = try await track.trimmingBlankFrames()
+		let trimmedTimeRange = try await trimmedTrack.load(.timeRange)
+
+		#expect(trimmedTimeRange == originalTimeRange)
+	}
+
+	@Test
 	func fullPreviewWithNoGeneratedFramesThrowsInsteadOfCrashing() async throws {
 		let event = FullPreviewGenerationEvent.ready(
 			settings: .init(
@@ -513,6 +539,65 @@ struct Tests {
 		#expect(data.starts(with: Data("GIF".utf8)))
 		// 1.5s at 2fps = 3 frames, bounce doubles minus apex = 3*2-1 = 5
 		#expect(try gifFrameCount(data) == 5)
+	}
+
+	@Test
+	func gifEstimationSucceedsWithFullAppPipeline() async throws {
+		let videoURL = try await makeTestVideo(frameCount: 60) { frameNumber in
+			let color = UInt8(frameNumber % 256)
+			return try makePixelBuffer(red: color, green: 255 - color, blue: color / 2)
+		}
+		defer {
+			try? videoURL.deletingLastPathComponent().delete()
+		}
+
+		let (validatedAsset, metadata) = try await VideoValidator.validate(videoURL)
+		let previewable = try await PreviewableComposition(extractPreviewableCompositionFrom: validatedAsset)
+
+		let generator = GIFGenerator()
+		let data = try await generator.run(
+			.init(
+				asset: previewable,
+				sourceURL: videoURL,
+				quality: 0.5,
+				dimensions: (width: 8, height: 8),
+				frameRate: 2,
+				loop: .never,
+				bounce: false,
+				trackPreferredTransform: metadata.trackPreferredTransform
+			),
+			isEstimation: true
+		) { _ in }
+
+		#expect(data.starts(with: Data("GIF".utf8)))
+		#expect(await generator.sizeMultiplierForEstimation > 1)
+	}
+
+	@Test(arguments: [4, 10, 30, 50])
+	func gifEstimationSucceedsWithRealVideoFile(fps: Int) async throws {
+		let videoURL = URL(filePath: "/Users/sindresorhus/dev/project-extras/Gifski/Fixture/60fps - short.mp4")
+		guard videoURL.exists else {
+			return
+		}
+
+		let (validatedAsset, metadata) = try await VideoValidator.validate(videoURL)
+
+		let generator = GIFGenerator()
+		let data = try await generator.run(
+			.init(
+				asset: validatedAsset,
+				sourceURL: videoURL,
+				quality: 0.5,
+				dimensions: (width: 320, height: 180),
+				frameRate: fps,
+				loop: .never,
+				bounce: false,
+				trackPreferredTransform: metadata.trackPreferredTransform
+			),
+			isEstimation: true
+		) { _ in }
+
+		#expect(data.starts(with: Data("GIF".utf8)))
 	}
 
 	@Test
@@ -992,6 +1077,71 @@ struct Tests {
 
 		#expect(size.width == 33)
 		#expect(size.height == 33)
+	}
+
+	@Test
+	func cropMinimumSizeUsesOneHundredPixels() {
+		let minSize = CropRect.minSize(videoSize: .init(width: 1920, height: 1080))
+
+		#expect(minSize.width == 100.0 / 1920.0)
+		#expect(minSize.height == 100.0 / 1080.0)
+	}
+
+	@Test
+	func cropMinimumSizeIsCappedToSourceDimensions() {
+		let minSize = CropRect.minSize(videoSize: .init(width: 50, height: 30))
+
+		#expect(minSize.width == 1.0)
+		#expect(minSize.height == 1.0)
+	}
+
+	@Test
+	func symmetricCropDragOnTinySourceDoesNotTrap() {
+		let crop = CropRect.initial
+		let minSize = CropRect.minSize(videoSize: .init(width: 50, height: 50))
+		let result = crop.applySymmetric(
+			position: .topLeft,
+			minSize: minSize,
+			delta: .init(x: 0.1, y: 0.1)
+		)
+
+		#expect(result == crop)
+	}
+
+	@Test
+	func symmetricCropDragWithAlreadyTooSmallCropDoesNotShrinkFurther() {
+		let crop = CropRect(x: 0.4, y: 0.4, width: 0.02, height: 0.02)
+		let minSize = crop.effectiveMinSizeForDrag(videoSize: .init(width: 1920, height: 1080))
+		let result = crop.applySymmetric(
+			position: .topLeft,
+			minSize: minSize,
+			delta: .init(x: 0.01, y: 0.01)
+		)
+
+		#expect(result == crop)
+	}
+
+	@Test
+	func centeredAspectRatioCropOnTinySourceStaysInBounds() {
+		let crop = CropRect.centeredFrom(
+			aspectWidth: 16,
+			aspectHeight: 9,
+			forDimensions: .init(width: 50, height: 30)
+		)
+
+		#expect(crop == .initial)
+	}
+
+	@Test
+	func aspectRatioCropInsideCurrentRectKeepsLongestSideWhenPossible() {
+		let crop = CropRect(x: 0.3, y: 0.3, width: 0.4, height: 0.3)
+		let result = crop.withAspectRatio(
+			aspectWidth: 9,
+			aspectHeight: 16,
+			forDimensions: .init(width: 1000, height: 1000)
+		)
+
+		#expect(result == CropRect(x: 0.3875, y: 0.25, width: 0.225, height: 0.4))
 	}
 
 	@Test

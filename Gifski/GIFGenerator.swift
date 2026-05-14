@@ -101,21 +101,21 @@ actor GIFGenerator {
 				let sampleCount = 25
 				let startIndex = (originalCount - sampleCount) / 2
 				frameTimes = Array(frameTimes[startIndex..<(startIndex + sampleCount)])
+
+				if
+					let firstFrameTime = frameTimes.first,
+					let lastFrameTime = frameTimes.last,
+					lastFrameTime > firstFrameTime
+				{
+					let endTime = CMTimeAdd(
+						lastFrameTime,
+						CMTime(seconds: 1 / frameRate, preferredTimescale: lastFrameTime.timescale)
+					)
+					reader.timeRange = CMTimeRange(start: firstFrameTime, end: min(endTime, reader.timeRange.end))
+				}
 			}
 
 			sizeMultiplierForEstimation = frameTimes.isEmpty ? 1.0 : Double(originalCount) / Double(frameTimes.count)
-
-			if
-				let firstFrameTime = frameTimes.first,
-				let lastFrameTime = frameTimes.last,
-				lastFrameTime > firstFrameTime
-			{
-				let endTime = CMTimeAdd(
-					lastFrameTime,
-					CMTime(seconds: 1 / frameRate, preferredTimescale: lastFrameTime.timescale)
-				)
-				reader.timeRange = CMTimeRange(start: firstFrameTime, end: endTime)
-			}
 		}
 
 		let totalFrameCount = totalFrameCount(for: conversion, sourceFrameCount: frameTimes.count)

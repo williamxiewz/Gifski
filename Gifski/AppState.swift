@@ -1,6 +1,46 @@
 import SwiftUI
 import UserNotifications
 import DockProgress
+import OSLog
+
+@MainActor
+private final class ImportLog {
+	static let shared = ImportLog()
+
+	private let logger = Logger(
+		subsystem: Bundle.main.bundleIdentifier ?? "com.sindresorhus.Gifski",
+		category: "Import"
+	)
+
+	private var entries = [String]()
+
+	var text: String {
+		entries.joined(separator: "\n")
+	}
+
+	func info(_ publicMessage: String, _ privateMessage: @autoclosure () -> String) {
+		logger.info("\(publicMessage, privacy: .public)")
+		append("info", privateMessage())
+	}
+
+	func debug(_ publicMessage: String, _ privateMessage: @autoclosure () -> String) {
+		logger.debug("\(publicMessage, privacy: .public)")
+		append("debug", privateMessage())
+	}
+
+	func error(_ publicMessage: String, _ privateMessage: @autoclosure () -> String) {
+		logger.error("\(publicMessage, privacy: .public)")
+		append("error", privateMessage())
+	}
+
+	private func append(_ level: String, _ text: String) {
+		entries.append("[\(Date.now.formatted(date: .numeric, time: .complete))] \(level): \(text)")
+
+		if entries.count > 200 {
+			entries.removeFirst(entries.count - 200)
+		}
+	}
+}
 
 @MainActor
 @Observable
@@ -25,6 +65,7 @@ final class AppState {
 
 	var navigationPath = [Route]()
 	var isFileImporterPresented = false
+	var isOpeningVideo = false
 
 	enum Mode {
 		case normal
@@ -43,6 +84,22 @@ final class AppState {
 	}
 
 	var onExportAsVideo: (() -> Void)?
+
+	func copyDiagnosticLogs() {
+		let importLogs = ImportLog.shared.text
+
+		NSPasteboard.general.with {
+			$0.setString(
+				"""
+				\(SSApp.debugInfo)
+
+				Import Logs
+				\(importLogs.isEmpty ? "No logs recorded." : importLogs)
+				""",
+				forType: .string
+			)
+		}
+	}
 
 	/**
 	Provides a binding for a toggle button to access a certain mode.
@@ -101,21 +158,57 @@ final class AppState {
 	}
 
 	func start(_ url: URL) {
+		guard !isOpeningVideo else {
+			ImportLog.shared.info(
+				"Ignored open request while another video is opening",
+				"Ignored open request while another video is opening: filename=\(url.lastPathComponent), pathExtension=\(url.pathExtension)"
+			)
+			return
+		}
+
 		// We intentionally do not call `stop` on this one later for simplicity since we will never get a lot of files.
-		_ = url.startAccessingSecurityScopedResource()
+		let didStartSecurityScopedAccess = url.startAccessingSecurityScopedResource()
+		let contentType = url.contentType?.identifier ?? "unknown"
+		ImportLog.shared.info(
+			"Start opening video: pathExtension=\(url.pathExtension), contentType=\(contentType)",
+			"Start opening video: filename=\(url.lastPathComponent), pathExtension=\(url.pathExtension), contentType=\(contentType), fileSize=\(url.fileSize)"
+		)
+		ImportLog.shared.debug(
+			"Security scoped access: didStart=\(didStartSecurityScopedAccess)",
+			"Security scoped access: filename=\(url.lastPathComponent), didStart=\(didStartSecurityScopedAccess)"
+		)
 
 		// We have to nil it out first and dispatch, otherwise it shows the old video. (macOS 14.3)
 		navigationPath = []
+		isOpeningVideo = true
 
 		// Reset mode to prevent the new EditScreen from inheriting preview/crop state.
 		mode = .normal
 
 		Task { [self] in
+			defer {
+				isOpeningVideo = false
+			}
+
 			do {
+				ImportLog.shared.info(
+					"Validating video",
+					"Validating video: filename=\(url.lastPathComponent)"
+				)
 				// TODO: Simplify the validator.
 				let (asset, metadata) = try await VideoValidator.validate(url)
+				ImportLog.shared.info(
+					"Video validated",
+					"Video validated: filename=\(url.lastPathComponent), dimensions=\(metadata.dimensions.formatted), duration=\(metadata.duration.toTimeInterval.formatted(.number.precision(.fractionLength(2)))), hasAudio=\(metadata.hasAudio)"
+				)
 				navigationPath = [.edit(url, asset, metadata)]
 			} catch {
+				let nsError = error as NSError
+				let recoverySuggestion = nsError.localizedRecoverySuggestion.map { ", recoverySuggestion=\($0)" } ?? ""
+				ImportLog.shared.error(
+					"Video validation failed: errorDomain=\(nsError.domain), errorCode=\(nsError.code)",
+					"Video validation failed: filename=\(url.lastPathComponent), errorDomain=\(nsError.domain), errorCode=\(nsError.code), message=\(error.localizedDescription)\(recoverySuggestion)"
+				)
 				self.error = error
 			}
 		}
@@ -126,13 +219,20 @@ final class AppState {
 	*/
 	fileprivate func extractSharedVideoUrlIfAny(from url: URL) -> URL? {
 		guard url.host == "shareExtension" else {
+			ImportLog.shared.debug(
+				"Using direct open URL: pathExtension=\(url.pathExtension)",
+				"Using direct open URL: filename=\(url.lastPathComponent), pathExtension=\(url.pathExtension)"
+			)
 			return url
 		}
+
+		ImportLog.shared.info("Resolving share extension URL", "Resolving share extension URL")
 
 		guard
 			let path = url.queryDictionary["path"],
 			let appGroupShareVideoUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Shared.appGroupIdentifier)?.appendingPathComponent(path, isDirectory: false)
 		else {
+			ImportLog.shared.error("Failed to resolve share extension URL", "Failed to resolve share extension URL")
 			NSAlert.showModal(
 				for: SSApp.swiftUIMainWindow,
 				title: "Could not retrieve the shared video."
@@ -140,22 +240,45 @@ final class AppState {
 			return nil
 		}
 
+		ImportLog.shared.info(
+			"Resolved share extension URL: pathExtension=\(appGroupShareVideoUrl.pathExtension)",
+			"Resolved share extension URL: filename=\(appGroupShareVideoUrl.lastPathComponent), pathExtension=\(appGroupShareVideoUrl.pathExtension)"
+		)
 		return appGroupShareVideoUrl
 	}
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 	func applicationDidFinishLaunching(_ notification: Notification) {
+		ImportLog.shared.info("Application did finish launching", "Application did finish launching")
 		// Set launch completions option if the notification center could not be set up already.
 		LaunchCompletions.applicationDidLaunch()
 	}
 
 	// Using AppDelegate instead of `.onOpenURL` because we need to handle multiple URLs at once to reject multi-file drops with a user-friendly error.
 	func application(_ application: NSApplication, open urls: [URL]) {
+		ImportLog.shared.info(
+			"Received open URLs event: count=\(urls.count), pathExtensions=\(urls.map(\.pathExtension).joined(separator: ", "))",
+			"Received open URLs event: count=\(urls.count), pathExtensions=\(urls.map(\.pathExtension).joined(separator: ", "))"
+		)
+
+		guard !AppState.shared.isOpeningVideo else {
+			ImportLog.shared.info(
+				"Ignored open URLs event while another video is opening: count=\(urls.count)",
+				"Ignored open URLs event while another video is opening: count=\(urls.count)"
+			)
+			return
+		}
+
 		guard
 			urls.count == 1,
 			let videoUrl = urls.first
 		else {
+			ImportLog.shared.error(
+				"Rejected open URLs event because it contained \(urls.count) files",
+				"Rejected open URLs event because it contained \(urls.count) files"
+			)
 			NSAlert.showModal(
 				for: SSApp.swiftUIMainWindow,
 				title: "Gifski can only convert a single file at a time."
@@ -165,11 +288,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 
 		guard let videoUrl2 = AppState.shared.extractSharedVideoUrlIfAny(from: videoUrl) else {
+			ImportLog.shared.error("Rejected open URLs event because no usable video URL could be resolved", "Rejected open URLs event because no usable video URL could be resolved")
 			return
 		}
 
 		// Start video conversion on launch
 		LaunchCompletions.add {
+			ImportLog.shared.info(
+				"Running queued open video completion: pathExtension=\(videoUrl2.pathExtension)",
+				"Running queued open video completion: filename=\(videoUrl2.lastPathComponent), pathExtension=\(videoUrl2.pathExtension)"
+			)
 			AppState.shared.start(videoUrl2)
 		}
 	}

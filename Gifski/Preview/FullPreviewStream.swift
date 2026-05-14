@@ -151,12 +151,14 @@ actor FullPreviewStream {
 			updatePreview(newPreviewState: .cancelled(requestID: newID()))
 		}
 
-		guard let generationTask else {
+		let task = generationTask
+		generationTask = nil
+		guard let task else {
 			return
 		}
 
-		generationTask.cancel()
-		_ = await generationTask.result
+		task.cancel()
+		_ = await task.result
 	}
 
 	private func updatePreview(newPreviewState: FullPreviewGenerationEvent) {

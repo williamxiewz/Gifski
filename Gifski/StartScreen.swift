@@ -5,15 +5,19 @@ struct StartScreen: View {
 
 	var body: some View {
 		VStack(spacing: 8) {
-			Text("Drop Video")
-				.fontWeight(.medium)
-			Text("or")
-				.font(.system(size: 10))
-				.italic()
-			Button("Open") {
-				appState.isFileImporterPresented = true
+			if appState.isOpeningVideo {
+				ProgressView("Opening Video…")
+			} else {
+				Text("Drop Video")
+					.fontWeight(.medium)
+				Text("or")
+					.font(.system(size: 10))
+					.italic()
+				Button("Open") {
+					appState.isFileImporterPresented = true
+				}
+				.buttonStyle(.glass)
 			}
-			.buttonStyle(.glass)
 		}
 		.font(.title3)
 		.controlSize(.extraLarge)

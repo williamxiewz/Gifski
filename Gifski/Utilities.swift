@@ -586,6 +586,12 @@ extension AVAssetTrack {
 		let readerOutput = AVAssetReaderTrackOutput(track: wrappedTrack, outputSettings: nil)
 		let provider = reader.outputProvider(for: readerOutput)
 		try reader.start()
+		defer {
+			// The provider may still have CoreMedia readiness callbacks in flight when we return after finding the first non-empty sample.
+			if reader.status == .reading {
+				reader.cancelReading()
+			}
+		}
 
 		// Iterate through samples until we reach one with a non-zero size.
 		while let sampleBuffer = try await provider.next() {
@@ -827,6 +833,12 @@ extension AVAssetTrack {
 		let readerOutput = AVAssetReaderTrackOutput(track: self, outputSettings: nil)
 		let provider = reader.outputProvider(for: readerOutput)
 		try reader.start()
+		defer {
+			// End the provider-backed read explicitly so CoreMedia readiness callbacks do not outlive this metadata scan.
+			if reader.status == .reading {
+				reader.cancelReading()
+			}
+		}
 
 		var frameCount = 0
 		var keyframeCount = 0
@@ -5336,6 +5348,22 @@ struct AnyDropDelegate: DropDelegate {
 
 extension DropInfo {
 	/**
+	The file URLs in the current drag operation.
+	*/
+	func fileURLs() -> [URL] {
+		NSPasteboard(name: .drag).fileURLs()
+	}
+
+	/**
+	The first file URL in the current drag operation that looks like a movie.
+	*/
+	var firstMovieFileURL: URL? {
+		fileURLs().first {
+			$0.contentType?.conforms(to: .movie) == true
+		}
+	}
+
+	/**
 	This is useful as `DropInfo` usually on has `NSItemProvider` items and they have to be fetched async, while the validation has to happen synchronously.
 	*/
 	func fileURLsConforming(to contentTypes: [UTType]) -> [URL] {
@@ -5347,6 +5375,13 @@ extension DropInfo {
 	*/
 	func hasFileURLsConforming(to contentTypes: [UTType]) -> Bool {
 		!fileURLsConforming(to: contentTypes).isEmpty
+	}
+
+	/**
+	Indicates whether the current drag operation contains at least one file URL.
+	*/
+	var hasFileURLs: Bool {
+		!fileURLs().isEmpty
 	}
 }
 

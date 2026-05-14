@@ -321,7 +321,9 @@ private struct CustomPixelField: View {
 	}
 
 	var minMax: ClosedRange<Int> {
-		Int(CropRect.minRectWidthHeight)...Int(dimensions[keyPath: side])
+		let maximum = Int(dimensions[keyPath: side])
+		let minimum = min(Int(CropRect.minRectWidthHeight), maximum)
+		return minimum...maximum
 	}
 
 	var unitSizeSide: WritableKeyPath<UnitSize, Double> {

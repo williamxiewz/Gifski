@@ -179,7 +179,7 @@ private struct _EditScreen: View {
 			updateBackgroundWorkOnSettingsChange()
 		}
 		.onChange(of: loopDelay) {
-			updatePreviewOnSettingsChange()
+			updateBackgroundWorkOnSettingsChange()
 		}
 		.alert2(
 			"Reverse Playback Preview Limitation",
