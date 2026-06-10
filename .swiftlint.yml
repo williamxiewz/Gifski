@@ -97,7 +97,7 @@ only_rules:
   - prefer_asset_symbols
   - prefer_condition_list
   - prefer_key_path
-  - prefer_self_in_static_references
+  # - prefer_self_in_static_references
   - prefer_self_type_over_type_of_self
   - prefer_zero_over_explicit_init
   - private_action

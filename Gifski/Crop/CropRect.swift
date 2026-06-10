@@ -396,7 +396,7 @@ extension CropRect {
 	Returns the minimum crop size used while dragging this crop rect.
 	*/
 	func effectiveMinSizeForDrag(videoSize dimensions: CGSize) -> UnitSize {
-		let minSize = CropRect.minSize(videoSize: dimensions)
+		let minSize = Self.minSize(videoSize: dimensions)
 		return .init(
 			width: min(minSize.width, width),
 			height: min(minSize.height, height)

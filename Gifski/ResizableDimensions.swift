@@ -133,7 +133,7 @@ extension Dimensions {
 		switch self {
 		case .pixels(let value, _):
 			let width = min(value.width, newOriginalSize.width)
-			return Dimensions
+			return Self
 				.pixels(newOriginalSize, originalSize: newOriginalSize)
 				.aspectResized(usingWidth: width)
 		case .percent(let value, _):

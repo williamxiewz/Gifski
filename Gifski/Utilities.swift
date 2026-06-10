@@ -1587,16 +1587,16 @@ extension SSApp {
 		DistributedNotificationCenter.default.publisher(for: .init("\(SSApp.idString):openSendFeedback"))
 			.sink { _ in
 				DispatchQueue.main.async {
-					SSApp.appFeedbackUrl().open()
+					appFeedbackUrl().open()
 				}
 			}
 			.storeForever()
 
-		DistributedNotificationCenter.default.publisher(for: .init("\(SSApp.idString):copyDebugInfo"))
+		DistributedNotificationCenter.default.publisher(for: .init("\(idString):copyDebugInfo"))
 			.sink { _ in
 				DispatchQueue.main.async {
 					NSPasteboard.general.prepareForNewContents()
-					NSPasteboard.general.setString(SSApp.debugInfo, forType: .string)
+					NSPasteboard.general.setString(debugInfo, forType: .string)
 				}
 			}
 			.storeForever()
@@ -5097,7 +5097,7 @@ extension URL {
 		try FileManager.default.url(
 			for: .itemReplacementDirectory,
 			in: .userDomainMask,
-			appropriateFor: appropriateFor ?? URL.temporaryDirectory,
+			appropriateFor: appropriateFor ?? temporaryDirectory,
 			create: true
 		)
 	}

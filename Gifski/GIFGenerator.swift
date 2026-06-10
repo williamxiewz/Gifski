@@ -136,7 +136,7 @@ actor GIFGenerator {
 			throw CancellationError()
 		}
 
-		try await addFrames(
+		try addFrames(
 			to: gifski,
 			reader: reader,
 			output: output,
@@ -151,6 +151,7 @@ actor GIFGenerator {
 		return try gifski.finish()
 	}
 
+	// We intentionally do not use `withTaskCancellationHandler` to call `reader.cancelReading()` here because `AVAssetReader` is not thread-safe and concurrent `cancelReading()` + `copyNextSampleBuffer()` causes EXC_BAD_ACCESS crashes inside MediaToolbox. Instead, we rely on cooperative cancellation: `readFrames` checks `Task.checkCancellation()` each iteration and the `defer` block calls `cancelReading()` safely from the same thread.
 	private func addFrames(
 		to gifski: Gifski,
 		reader: AVAssetReader,
@@ -161,25 +162,18 @@ actor GIFGenerator {
 		frameRate: Double,
 		startTime: Double,
 		loopDelayOffset: Double
-	) async throws {
-		let readerCancellation = AssetReaderCancellation(reader: reader)
-		let gifskiCapture = SendableGifskiCapture(gifski)
-
-		try await withTaskCancellationHandler {
-			try readFrames(
-				to: gifskiCapture.gifski,
-				reader: reader,
-				output: output,
-				frameTimes: frameTimes,
-				conversion: conversion,
-				totalFrameCount: totalFrameCount,
-				frameRate: frameRate,
-				startTime: startTime,
-				loopDelayOffset: loopDelayOffset
-			)
-		} onCancel: {
-			readerCancellation.cancel()
-		}
+	) throws {
+		try readFrames(
+			to: gifski,
+			reader: reader,
+			output: output,
+			frameTimes: frameTimes,
+			conversion: conversion,
+			totalFrameCount: totalFrameCount,
+			frameRate: frameRate,
+			startTime: startTime,
+			loopDelayOffset: loopDelayOffset
+		)
 	}
 
 	/**
@@ -540,27 +534,6 @@ actor GIFGenerator {
 	}
 }
 
-private final class AssetReaderCancellation: @unchecked Sendable {
-	// `AVAssetReader` is not Sendable, but the cancellation handler only calls `cancelReading()` to stop an in-flight read.
-	private let reader: AVAssetReader
-
-	init(reader: AVAssetReader) {
-		self.reader = reader
-	}
-
-	func cancel() {
-		reader.cancelReading()
-	}
-}
-
-private final class SendableGifskiCapture: @unchecked Sendable {
-	// Wraps `Gifski` with `@unchecked Sendable` so it can cross the `@Sendable` boundary of the `withTaskCancellationHandler` operation closure. The cancel handler does not touch it.
-	let gifski: Gifski
-
-	init(_ gifski: Gifski) {
-		self.gifski = gifski
-	}
-}
 
 extension GIFGenerator {
 	/**
@@ -844,7 +817,7 @@ extension GIFGenerator {
 extension GIFGenerator {
 	static func runProgressable(_ conversion: GIFGenerator.Conversion) -> ProgressableTask<Double, Data> {
 		ProgressableTask { progressContinuation in
-			try await GIFGenerator.run(conversion) {
+			try await run(conversion) {
 				progressContinuation.yield($0)
 			}
 		}
