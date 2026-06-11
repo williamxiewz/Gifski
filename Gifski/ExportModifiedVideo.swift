@@ -16,7 +16,7 @@ struct ExportModifiedVideoView: View {
 			}
 			.fileExporter(
 				isPresented: isFileExporterPresented,
-				item: exportableMP4,
+				item: exportableModifiedVideo,
 				defaultFilename: defaultExportModifiedFileName
 			) {
 				do {
@@ -36,15 +36,13 @@ struct ExportModifiedVideoView: View {
 			)
 	}
 
-	private var exportableMP4: ExportableMP4? {
-		guard case let .finished(url) = state else {
-			return nil
-		}
-		return ExportableMP4(url: url)
+	private var exportableModifiedVideo: ExportableModifiedVideo? {
+		state.finishedURL.map(ExportableModifiedVideo.init)
 	}
 
 	private var defaultExportModifiedFileName: String {
-		"\(sourceURL.filenameWithoutExtension) modified.mp4"
+		let fileExtension = state.finishedURL?.pathExtension ?? "mp4"
+		return "\(sourceURL.filenameWithoutExtension) modified.\(fileExtension)"
 	}
 
 	private var isProgressSheetPresented: Binding<Bool> {
@@ -75,7 +73,7 @@ struct ExportModifiedVideoView: View {
 			set: {
 				guard
 					!$0,
-					case let .finished(url) = state else {
+					let url = state.finishedURL else {
 					return
 				}
 				try? url.delete()
@@ -143,6 +141,14 @@ extension ExportModifiedVideoState {
 		}
 	}
 
+	var finishedURL: URL? {
+		guard case let .finished(url) = self else {
+			return nil
+		}
+
+		return url
+	}
+
 	/**
 	Update progress sheet visibility if the state is currently exporting.
 	- Returns: Whether the state is still exporting.
@@ -162,34 +168,43 @@ extension ExportModifiedVideoState {
 }
 
 /**
-Convert a source video to an `.mp4` using the same scale, speed, and crop as the exported `.gif`.
+Convert a source video using the same scale, speed, and crop as the exported `.gif`.
+
+Alpha-capable sources (for example, ProRes 4444) are exported as HEVC with alpha in a `.mov` to preserve transparency. Everything else is exported as an `.mp4`.
 - Returns: Temporary URL of the exported video.
 */
 func exportModifiedVideo(conversion: GIFGenerator.Conversion) async throws -> URL {
 	let (composition, compositionVideoTrack, sourceVideoTrack) = try await createComposition(
 		conversion: conversion
 	)
+
+	let hasAlpha = try await sourceVideoTrack.hasAlphaChannel
+	let preset = hasAlpha ? AVAssetExportPresetHEVCHighestQualityWithAlpha : AVAssetExportPresetHighestQuality
+	let fileType: AVFileType = hasAlpha ? .mov : .mp4
+	let fileExtension = hasAlpha ? "mov" : "mp4"
+
 	let videoComposition = try await createVideoComposition(
 		compositionVideoTrack: compositionVideoTrack,
 		sourceVideoTrack: sourceVideoTrack,
-		conversion: conversion
+		conversion: conversion,
+		preservingAlpha: hasAlpha
 	)
-	let outputURL = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
+	let outputURL = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).\(fileExtension)")
 
 	let presets = AVAssetExportSession.allExportPresets()
-	guard presets.contains(AVAssetExportPresetHighestQuality) else {
+	guard presets.contains(preset) else {
 		throw ExportModifiedVideoView.Error.unableToCreateExportSession
 	}
-	guard await AVAssetExportSession.compatibility(ofExportPreset: AVAssetExportPresetHighestQuality, with: composition, outputFileType: .mp4) else {
+	guard await AVAssetExportSession.compatibility(ofExportPreset: preset, with: composition, outputFileType: fileType) else {
 		throw ExportModifiedVideoView.Error.unableToCreateExportSession
 	}
 
-	guard let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+	guard let exportSession = AVAssetExportSession(asset: composition, presetName: preset) else {
 		throw ExportModifiedVideoView.Error.unableToCreateExportSession
 	}
 	exportSession.shouldOptimizeForNetworkUse = true
 	exportSession.videoComposition = videoComposition
-	try await exportSession.export(to: outputURL, as: .mp4)
+	try await exportSession.export(to: outputURL, as: fileType)
 	return outputURL
 }
 
@@ -213,26 +228,29 @@ private func createComposition(
 		of: videoTrack,
 		at: .zero
 	)
-	let preferredTransform: CGAffineTransform
-	if let trackPreferredTransform = conversion.trackPreferredTransform {
-		preferredTransform = trackPreferredTransform
-	} else {
-		preferredTransform = try await videoTrack.load(.preferredTransform)
-	}
-	compositionTrack.preferredTransform = preferredTransform
+	compositionTrack.preferredTransform = try await conversion.geometry(for: videoTrack).preferredTransform
 	// Return the source track too because composition tracks do not reliably carry the natural-size geometry needed by the shared crop/scale code.
 	return (composition, compositionTrack, videoTrack)
 }
 
 /**
-Create an `AVVideoComposition` that will scale, translate, and crop the `compositionVideoTrack`.
+Create an `AVVideoComposition` that will scale, translate, and crop the `compositionVideoTrack`. When `preservingAlpha` is set, it uses the Core Image based compositor that keeps the source's transparency.
 */
 private func createVideoComposition(
 	compositionVideoTrack: AVMutableCompositionTrack,
 	sourceVideoTrack: AVAssetTrack,
-	conversion: GIFGenerator.Conversion
+	conversion: GIFGenerator.Conversion,
+	preservingAlpha: Bool
 ) async throws -> AVVideoComposition {
 	let frameDuration = try await compositionVideoTrack.load(.minFrameDuration)
+
+	if preservingAlpha {
+		return try await conversion.alphaPreservingVideoComposition(
+			for: compositionVideoTrack,
+			usingGeometryOf: sourceVideoTrack,
+			frameDuration: frameDuration
+		)
+	}
 
 	// The instruction time range must be greater than or equal to the video and there is no penalty for making it longer, so add 1.0 second to the duration just to be safe
 	let timeRange = CMTimeRange(start: .zero, duration: .init(seconds: try await conversion.videoWithoutBounceDuration.toTimeInterval + 1.0, preferredTimescale: .video))
@@ -244,10 +262,11 @@ private func createVideoComposition(
 	)
 }
 
-private struct ExportableMP4: Transferable {
+private struct ExportableModifiedVideo: Transferable {
 	let url: URL
 	static var transferRepresentation: some TransferRepresentation {
-		FileRepresentation(exportedContentType: .mpeg4Movie) { .init($0.url) }
+		// `.movie` so it covers both the `.mp4` and the alpha `.mov` output.
+		FileRepresentation(exportedContentType: .movie) { .init($0.url) }
 			.suggestedFileName { $0.url.filename }
 	}
 }

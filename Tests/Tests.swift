@@ -95,6 +95,7 @@ struct Tests {
 
 	private func makeTestVideo(
 		frameCount: Int,
+		codec: AVVideoCodecType = .h264,
 		pixelBufferForFrame: (Int) throws -> CVPixelBuffer
 	) async throws -> URL {
 		let directory = try URL.uniqueTemporaryDirectory()
@@ -103,7 +104,7 @@ struct Tests {
 		let input = AVAssetWriterInput(
 			mediaType: .video,
 			outputSettings: [
-				AVVideoCodecKey: AVVideoCodecType.h264,
+				AVVideoCodecKey: codec,
 				AVVideoWidthKey: 16,
 				AVVideoHeightKey: 16
 			]
@@ -208,6 +209,76 @@ struct Tests {
 		}
 
 		return pixelBuffer
+	}
+
+	/**
+	Left half opaque red, right half fully transparent.
+	*/
+	private func makeTransparentPixelBuffer() throws -> CVPixelBuffer {
+		var newPixelBuffer: CVPixelBuffer?
+		let status = CVPixelBufferCreate(
+			nil,
+			16,
+			16,
+			kCVPixelFormatType_32BGRA,
+			nil,
+			&newPixelBuffer
+		)
+		try #require(status == kCVReturnSuccess)
+		let pixelBuffer = try #require(newPixelBuffer)
+
+		CVPixelBufferLockBaseAddress(pixelBuffer, [])
+		defer {
+			CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+		}
+
+		guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+			throw "Could not access pixel buffer storage.".toError
+		}
+
+		let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+		let height = CVPixelBufferGetHeight(pixelBuffer)
+		let width = CVPixelBufferGetWidth(pixelBuffer)
+		let buffer = baseAddress.bindMemory(to: UInt8.self, capacity: bytesPerRow * height)
+
+		for y in 0..<height {
+			for x in 0..<width {
+				let offset = (y * bytesPerRow) + (x * 4)
+				let isOpaque = x < width / 2
+				buffer[offset] = 0 // Blue
+				buffer[offset + 1] = 0 // Green
+				buffer[offset + 2] = isOpaque ? 255 : 0 // Red
+				buffer[offset + 3] = isOpaque ? 255 : 0 // Alpha
+			}
+		}
+
+		return pixelBuffer
+	}
+
+	private func transparentPixelCount(gifData: Data, frameIndex: Int) throws -> Int {
+		let imageSource = try #require(CGImageSourceCreateWithData(gifData as CFData, nil))
+		let image = try #require(CGImageSourceCreateImageAtIndex(imageSource, frameIndex, nil))
+		let width = image.width
+		let height = image.height
+		var pixels = [UInt8](repeating: 0, count: width * height * 4)
+		let context = try #require(CGContext(
+			data: &pixels,
+			width: width,
+			height: height,
+			bitsPerComponent: 8,
+			bytesPerRow: width * 4,
+			space: CGColorSpaceCreateDeviceRGB(),
+			bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+		))
+
+		context.draw(image, in: .init(x: 0, y: 0, width: Double(width), height: Double(height)))
+
+		var count = 0
+		for offset in stride(from: 3, to: pixels.count, by: 4) where pixels[offset] == 0 {
+			count += 1
+		}
+
+		return count
 	}
 
 	private func makeHorizontalSplitCGImage() throws -> CGImage {
@@ -642,6 +713,36 @@ struct Tests {
 	}
 
 	@Test
+	func gifGenerationPreservesAlphaFromProRes4444Source() async throws {
+		let videoURL = try await makeTestVideo(frameCount: 3, codec: .proRes4444) { _ in
+			try makeTransparentPixelBuffer()
+		}
+		defer {
+			try? videoURL.deletingLastPathComponent().delete()
+		}
+
+		let data = try await GIFGenerator.run(
+			.init(
+				asset: AVURLAsset(url: videoURL),
+				sourceURL: videoURL,
+				timeRange: 0...1,
+				quality: 0.8,
+				dimensions: (width: 16, height: 16),
+				frameRate: 2,
+				loop: .never,
+				bounce: false
+			)
+		) { _ in }
+
+		#expect(data.starts(with: Data("GIF".utf8)))
+
+		// The transparent right half of the ProRes 4444 source (128 of the 256 pixels) must survive as transparency in the GIF. The built-in video compositor flattened it to opaque, which is the bug this guards against. The bounds bracket the expected ~128 while allowing slight quantization slack.
+		let transparentCount = try transparentPixelCount(gifData: data, frameIndex: 0)
+		#expect(transparentCount > 96)
+		#expect(transparentCount < 160)
+	}
+
+	@Test
 	func exportModifiedVideoCreatesMovieFromVideoAsset() async throws {
 		let videoURL = try await makeTestVideo()
 		defer {
@@ -669,6 +770,36 @@ struct Tests {
 		#expect(outputURL.exists)
 		#expect(try await asset.dimensions == .init(width: 8, height: 8))
 		#expect(try await asset.load(.duration).seconds > 0)
+	}
+
+	@Test
+	func exportModifiedVideoPreservesAlphaForProRes4444Source() async throws {
+		let videoURL = try await makeTestVideo(frameCount: 3, codec: .proRes4444) { _ in
+			try makeTransparentPixelBuffer()
+		}
+		defer {
+			try? videoURL.deletingLastPathComponent().delete()
+		}
+
+		let outputURL = try await exportModifiedVideo(
+			conversion: .init(
+				asset: AVURLAsset(url: videoURL),
+				sourceURL: videoURL,
+				quality: 1,
+				dimensions: (width: 16, height: 16),
+				frameRate: 2,
+				loop: .never,
+				bounce: false
+			)
+		)
+		defer {
+			try? outputURL.delete()
+		}
+
+		// An alpha-capable source must export as an alpha-capable format (HEVC with alpha in a `.mov`) so transparency is not flattened.
+		#expect(outputURL.pathExtension == "mov")
+		let outputTrack = try #require(try await AVURLAsset(url: outputURL).firstVideoTrack)
+		#expect(try await outputTrack.hasAlphaChannel)
 	}
 
 	@Test

@@ -1,4 +1,5 @@
 import Foundation
+import CoreImage
 import VideoToolbox
 @preconcurrency import AVFoundation
 
@@ -301,7 +302,6 @@ actor GIFGenerator {
 		let output = try await makeFrameReaderOutput(
 			conversion: conversion,
 			videoTrack: firstVideoTrack,
-			videoTrackRange: videoTrackRange,
 			frameDuration: frameDuration
 		)
 
@@ -317,19 +317,15 @@ actor GIFGenerator {
 	private func makeFrameReaderOutput(
 		conversion: Conversion,
 		videoTrack: AVAssetTrack,
-		videoTrackRange: ClosedRange<Double>,
 		frameDuration: CMTime
 	) async throws -> AVAssetReaderVideoCompositionOutput {
 		let output = AVAssetReaderVideoCompositionOutput(
 			videoTracks: [videoTrack],
-			videoSettings: [
-				kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-			]
+			videoSettings: CVPixelBuffer.bgra32Attributes
 		)
 		output.alwaysCopiesSampleData = false
-		output.videoComposition = try await conversion.videoComposition(
+		output.videoComposition = try await conversion.alphaPreservingVideoComposition(
 			for: videoTrack,
-			timeRange: videoTrackRange.cmTimeRange,
 			frameDuration: frameDuration
 		)
 
@@ -670,11 +666,18 @@ extension GIFGenerator.Conversion {
 	}
 
 	/**
+	The crop to apply, falling back to the full frame when none is set.
+	*/
+	var resolvedCrop: CropRect {
+		crop ?? .initial
+	}
+
+	/**
 	- Returns: Crop rect in pixels, if there is no crop rect then it returns the full render size.
 	*/
 	var cropRectInPixels: CGRect {
 		get async throws {
-			(crop ?? .initial).unnormalize(forDimensions: try await renderSize)
+			resolvedCrop.unnormalize(forDimensions: try await renderSize)
 		}
 	}
 
@@ -701,12 +704,57 @@ extension GIFGenerator.Conversion {
 		naturalSize: CGSize,
 		preferredTransform: CGAffineTransform
 	) -> CGRect {
-		let rotatedSize = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform).size
-		let rotatedDimensions = CGSize(width: abs(rotatedSize.width), height: abs(rotatedSize.height))
+		let rotatedDimensions = naturalSize.applyingAbsolute(preferredTransform)
 
-		let cropRectInRotatedSpace = (crop ?? .initial).unnormalize(forDimensions: rotatedDimensions)
+		let cropRectInRotatedSpace = resolvedCrop.unnormalize(forDimensions: rotatedDimensions)
 
 		return cropRectInRotatedSpace.applying(preferredTransform.inverted())
+	}
+
+	/**
+	Loads `videoTrack`'s natural size together with the effective preferred transform — the `trackPreferredTransform` override when set, otherwise the track's own.
+	*/
+	func geometry(for videoTrack: AVAssetTrack) async throws -> (naturalSize: CGSize, preferredTransform: CGAffineTransform) {
+		let (naturalSize, loadedPreferredTransform) = try await videoTrack.load(.naturalSize, .preferredTransform)
+		return (naturalSize, trackPreferredTransform ?? loadedPreferredTransform)
+	}
+
+	/**
+	Creates an `AVVideoComposition` that crops, scales, and orients the source to this conversion's output settings while preserving the source's alpha channel. `geometryTrack` lets export apply the source track's natural size and orientation while reading frames from an `AVMutableCompositionTrack`.
+
+	The built-in `AVVideoComposition` compositor (used by `videoComposition(for:…)`) flattens the alpha channel to opaque, which loses transparency from alpha-capable sources like ProRes 4444. The Core Image based `AlphaPreservingCompositor` preserves it.
+	*/
+	func alphaPreservingVideoComposition(
+		for videoTrack: AVAssetTrack,
+		usingGeometryOf geometryTrack: AVAssetTrack? = nil,
+		frameDuration: CMTime
+	) async throws -> AVVideoComposition {
+		let (naturalSize, preferredTransform) = try await geometry(for: geometryTrack ?? videoTrack)
+		// Pad the instruction's range by one frame so a final frame landing on the track boundary is still covered.
+		let loadedTimeRange = try await videoTrack.load(.timeRange)
+		let timeRange = CMTimeRange(start: loadedTimeRange.start, duration: loadedTimeRange.duration + frameDuration)
+
+		let displaySize = naturalSize.applyingAbsolute(preferredTransform)
+
+		let crop = resolvedCrop
+		let outputSize = dimensionsAsCGSize ?? crop.unnormalize(forDimensions: displaySize).size
+
+		let instruction = AlphaPreservingCompositor.Instruction(
+			timeRange: timeRange,
+			trackID: videoTrack.trackID,
+			preferredTransform: preferredTransform,
+			crop: crop,
+			outputSize: outputSize
+		)
+
+		let configuration = AVVideoComposition.Configuration(
+			customVideoCompositorClass: AlphaPreservingCompositor.self,
+			frameDuration: frameDuration,
+			instructions: [instruction],
+			renderSize: outputSize
+		)
+
+		return AVVideoComposition(configuration: configuration)
 	}
 
 	/**
@@ -719,10 +767,9 @@ extension GIFGenerator.Conversion {
 		frameDuration: CMTime
 	) async throws -> AVVideoComposition {
 		let geometryTrack = geometryTrack ?? videoTrack
-		let outputRenderSize = (crop ?? .initial).unnormalize(forDimensions: try await renderSize(for: geometryTrack)).size
+		let outputRenderSize = resolvedCrop.unnormalize(forDimensions: try await renderSize(for: geometryTrack)).size
 		// Layer instructions operate in natural space (unrotated). The crop rect from UI is in preferred space, so transform it back to natural space before applying it.
-		let (naturalSize, loadedPreferredTransform) = try await geometryTrack.load(.naturalSize, .preferredTransform)
-		let preferredTransform = trackPreferredTransform ?? loadedPreferredTransform
+		let (naturalSize, preferredTransform) = try await geometry(for: geometryTrack)
 		let cropRect = cropRectInNaturalSpace(naturalSize: naturalSize, preferredTransform: preferredTransform)
 		let scaleTransform = CGAffineTransform(scaledBy: try await scale(for: geometryTrack))
 		// Crop is applied before the layer transform, so translate using the crop rect after scale and preferred orientation have moved it into render space.
@@ -821,5 +868,95 @@ extension GIFGenerator {
 				progressContinuation.yield($0)
 			}
 		}
+	}
+}
+
+/**
+A video compositor that crops, scales, and orients the source while preserving its alpha channel.
+
+The built-in `AVVideoComposition` compositor flattens the alpha channel to opaque, which loses transparency from alpha-capable sources like ProRes 4444. Core Image preserves it.
+*/
+private final class AlphaPreservingCompositor: NSObject, AVVideoCompositing {
+	/**
+	The per-conversion geometry, passed to the compositor through the composition instruction.
+	*/
+	final class Instruction: NSObject, AVVideoCompositionInstructionProtocol, @unchecked Sendable {
+		let timeRange: CMTimeRange
+		let enablePostProcessing = false
+		let containsTweening = false
+		// swiftlint:disable:next discouraged_optional_collection
+		let requiredSourceTrackIDs: [NSValue]?
+		let passthroughTrackID = kCMPersistentTrackID_Invalid
+
+		let preferredTransform: CGAffineTransform
+		let crop: CropRect
+		let outputSize: CGSize
+
+		init(
+			timeRange: CMTimeRange,
+			trackID: CMPersistentTrackID,
+			preferredTransform: CGAffineTransform,
+			crop: CropRect,
+			outputSize: CGSize
+		) {
+			self.timeRange = timeRange
+			self.requiredSourceTrackIDs = [NSNumber(value: trackID)]
+			self.preferredTransform = preferredTransform
+			self.crop = crop
+			self.outputSize = outputSize
+		}
+	}
+
+	enum Error: Swift.Error {
+		case missingSourceFrame
+	}
+
+	// swiftlint:disable:next discouraged_optional_collection
+	let sourcePixelBufferAttributes: [String: any Sendable]? = CVPixelBuffer.bgra32Attributes
+
+	let requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = CVPixelBuffer.bgra32Attributes
+
+	private let context = CIContext()
+
+	func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {}
+
+	func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
+		guard
+			let instruction = request.videoCompositionInstruction as? Instruction,
+			let trackID = request.sourceTrackIDs.first?.int32Value,
+			let sourceBuffer = request.sourceFrame(byTrackID: trackID),
+			let outputBuffer = request.renderContext.newPixelBuffer()
+		else {
+			request.finish(with: Error.missingSourceFrame)
+			return
+		}
+
+		// `CIImage` wraps the source buffer in natural (unrotated) space with a bottom-left origin, while `preferredTransform` is defined in AVFoundation's top-left space. Flip to top-left, apply the rotation, then flip back, leaving the image in the preferred display orientation so the crop coordinates (also display space) apply directly.
+		var image = CIImage(cvPixelBuffer: sourceBuffer)
+		let flip = CGAffineTransform(translationX: 0, y: image.extent.height).scaledBy(x: 1, y: -1)
+		image = image.transformed(by: flip.concatenating(instruction.preferredTransform).concatenating(flip))
+		// Rotations can leave the extent off-origin, so move it back to (0, 0) before cropping.
+		image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+
+		let cropRect = instruction.crop.unnormalize(forDimensions: image.extent.size)
+		// Core Image uses a bottom-left origin, so flip the crop rect's Y within the image height.
+		let flippedCropRect = CGRect(
+			x: cropRect.minX,
+			y: image.extent.height - cropRect.maxY,
+			width: cropRect.width,
+			height: cropRect.height
+		)
+		image = image
+			.cropped(to: flippedCropRect)
+			.transformed(by: CGAffineTransform(translationX: -flippedCropRect.minX, y: -flippedCropRect.minY))
+
+		// Scale the cropped region to the output size so downstream work matches the final dimensions instead of the full source resolution.
+		image = image.transformed(by: CGAffineTransform(
+			scaleX: instruction.outputSize.width / cropRect.width,
+			y: instruction.outputSize.height / cropRect.height
+		))
+
+		context.render(image, to: outputBuffer)
+		request.finish(withComposedVideoFrame: outputBuffer)
 	}
 }

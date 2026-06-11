@@ -96,13 +96,9 @@ final class PreviewVideoCompositor: NSObject, AVVideoCompositing {
 	}
 
 	// swiftlint:disable:next discouraged_optional_collection
-	let sourcePixelBufferAttributes: [String: any Sendable]? = [
-		kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-	]
+	let sourcePixelBufferAttributes: [String: any Sendable]? = CVPixelBuffer.bgra32Attributes
 
-	let requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = [
-		kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-	]
+	let requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = CVPixelBuffer.bgra32Attributes
 
 	func cancelAllPendingVideoCompositionRequests() {
 		pendingRequestTaskStore.cancelAll()

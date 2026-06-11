@@ -661,8 +661,7 @@ extension AVAssetTrack {
 				return nil
 			}
 
-			let size = naturalSize.applying(preferredTransform)
-			let preferredSize = CGSize(width: abs(size.width), height: abs(size.height))
+			let preferredSize = naturalSize.applyingAbsolute(preferredTransform)
 
 			// Workaround for https://github.com/sindresorhus/gifski-app/issues/76
 			guard preferredSize != .zero else {
@@ -728,6 +727,20 @@ extension AVAssetTrack {
 			}
 
 			return codec.description
+		}
+	}
+
+	/**
+	Whether the track's video format declares an alpha channel (for example, ProRes 4444 or HEVC with alpha).
+	*/
+	var hasAlphaChannel: Bool {
+		get async throws {
+			guard let formatDescription = try await load(.formatDescriptions).first else {
+				return false
+			}
+
+			let value = CMFormatDescriptionGetExtension(formatDescription, extensionKey: kCMFormatDescriptionExtension_ContainsAlphaChannel)
+			return (value as? NSNumber)?.boolValue ?? false
 		}
 	}
 
@@ -2041,6 +2054,16 @@ extension CGSize {
 	}
 
 	var cgRect: CGRect { .init(origin: .zero, size: self) }
+
+	/**
+	Returns the size after applying `transform`, with negative dimensions from rotations or flips normalized to positive.
+
+	For example, applying a video track's `preferredTransform` to its natural size yields the display (oriented) size.
+	*/
+	func applyingAbsolute(_ transform: CGAffineTransform) -> Self {
+		let transformed = applying(transform)
+		return Self(width: abs(transformed.width), height: abs(transformed.height))
+	}
 
 	var longestSide: Double { max(width, height) }
 
@@ -5721,6 +5744,13 @@ extension Color {
 
 
 extension CVPixelBuffer {
+	/**
+	Pixel buffer attributes requesting the 32-bit BGRA format used by our video compositors and readers.
+	*/
+	static let bgra32Attributes: [String: any Sendable] = [
+		kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+	]
+
 	var planeCount: Int {
 		CVPixelBufferGetPlaneCount(self)
 	}
