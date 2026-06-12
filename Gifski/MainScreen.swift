@@ -17,8 +17,8 @@ struct MainScreen: View {
 							.id(url)
 					case .conversion(let conversion):
 						ConversionScreen(conversion: conversion)
-					case .completed(let data, let url):
-						CompletedScreen(data: data, url: url)
+					case .completed(let data, let url, let sourceURL):
+						CompletedScreen(data: data, url: url, sourceURL: sourceURL)
 					}
 				}
 		}

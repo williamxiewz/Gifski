@@ -111,7 +111,7 @@ struct ConversionScreen: View {
 		// This works around some race issue where it would sometimes end up with edit screen after conversion.
 		var path = appState.navigationPath
 		path.removeLast()
-		path.append(.completed(data, url))
+		path.append(.completed(data, url, sourceURL: conversion.sourceURL))
 		appState.navigationPath = path
 	}
 

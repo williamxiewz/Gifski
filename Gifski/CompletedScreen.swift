@@ -14,6 +14,7 @@ struct CompletedScreen: View {
 
 	let data: Data
 	let url: URL
+	let sourceURL: URL
 
 	var body: some View {
 		VStack {
@@ -53,7 +54,7 @@ struct CompletedScreen: View {
 				appState.error = error
 			}
 		}
-		.fileDialogCustomizationID("export")
+		.fileDialogDefaultDirectory(saveDialogDirectory)
 		.fileDialogMessage("Choose where to save the GIF")
 		.fileDialogConfirmationLabel("Save")
 		.alert2(
@@ -121,6 +122,26 @@ struct CompletedScreen: View {
 		.frame(width: 300)
 		.padding()
 		.opacity(isShowingContent ? 1 : 0)
+	}
+
+	private static let appGroupContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Shared.appGroupIdentifier)
+
+	/**
+	The directory the save dialog should open in.
+
+	Defaults to the source video's folder, but falls back to Downloads when that is not a sensible place to save: the hidden app group container (where the Share Extension copies imported videos) or a read-only volume (for example, a file dragged in from a mounted disk image).
+	*/
+	private var saveDialogDirectory: URL {
+		let directory = sourceURL.deletingLastPathComponent()
+
+		guard
+			!directory.isVolumeReadonly,
+			directory.standardizedFileURL != Self.appGroupContainer?.standardizedFileURL
+		else {
+			return .downloadsDirectory
+		}
+
+		return directory
 	}
 
 	private func copyToClipboard(_ url: URL) {
