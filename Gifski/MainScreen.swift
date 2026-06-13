@@ -49,12 +49,30 @@ struct MainScreen: View {
 					$0.hasFileURLs
 				},
 				onPerform: {
-					// Validate that the dropped file is a movie before `AppState.start(_:)` resets navigation for the new import.
-					guard let url = $0.firstMovieFileURL else {
+					// Validate synchronously that the dropped file is a movie before `AppState.start(_:)` resets navigation for the new import.
+					guard $0.firstMovieFileURL != nil else {
 						return false
 					}
 
-					appState.start(url)
+					/*
+					IMPORTANT: Open the URL from the item provider, not from `firstMovieFileURL`/the drag pasteboard.
+
+					`NSItemProvider.getURL()` goes through the sandbox broker (Powerbox), which vends a security-scoped URL and shows the macOS file-access permission prompt (e.g. for the Downloads/Desktop folder) when needed. Reading the URL directly from the drag pasteboard returns a plain `file://` URL that bypasses the broker, so the app is never granted access, the prompt never appears, and the open silently fails. We use the pasteboard read above only for synchronous movie-type validation, never to actually open the file.
+
+					Do not "simplify" this back to opening `firstMovieFileURL` directly. That regressed window drops in 3.0.x.
+					*/
+					guard let itemProvider = $0.itemProviders(for: [.fileURL]).first else {
+						return false
+					}
+
+					Task {
+						guard let url = await itemProvider.getURL() else {
+							return
+						}
+
+						appState.start(url)
+					}
+
 					return true
 				}
 			)

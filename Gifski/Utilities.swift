@@ -5379,6 +5379,8 @@ extension DropInfo {
 
 	/**
 	The first file URL in the current drag operation that looks like a movie.
+
+	- Important: This reads directly from the drag pasteboard, which returns a plain `file://` URL that bypasses the sandbox broker. Use it only for synchronous validation, never to actually open the file. Opening it would skip the file-access permission prompt and silently fail. To open a dropped file, resolve the URL via `NSItemProvider.getURL()` instead.
 	*/
 	var firstMovieFileURL: URL? {
 		fileURLs().first {
