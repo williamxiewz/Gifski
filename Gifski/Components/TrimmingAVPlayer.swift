@@ -388,6 +388,7 @@ final class TrimmingAVPlayerView: AVPlayerView {
 	private var timeRangeCancellable: AnyCancellable?
 	private var trimmingCancellable: AnyCancellable?
 	private var readyForDisplayCancellable: AnyCancellable?
+	private var checkerboardVideoBounds: CGRect?
 
 	/**
 	The minimum duration the trimmer can be set to.
@@ -396,6 +397,12 @@ final class TrimmingAVPlayerView: AVPlayerView {
 
 	deinit {
 		print("TrimmingAVPlayerView - DEINIT")
+	}
+
+	override func layout() {
+		super.layout()
+
+		updateCheckerboardViewIfNeeded()
 	}
 
 	// TODO: This should be an AsyncSequence.
@@ -448,13 +455,11 @@ final class TrimmingAVPlayerView: AVPlayerView {
 	}
 
 	private func observeReadyForDisplay() {
-		// Wait for the video to be ready for display before adding the checkerboard,
-		// ensuring videoBounds is valid.
 		readyForDisplayCancellable = publisher(for: \.isReadyForDisplay)
 			.first(where: \.self)
 			.receive(on: DispatchQueue.main)
 			.sink { [weak self] _ in
-				self?.addCheckerboardView()
+				self?.updateCheckerboardViewIfNeeded()
 			}
 	}
 
@@ -523,16 +528,32 @@ final class TrimmingAVPlayerView: AVPlayerView {
 			}
 	}
 
-	fileprivate func addCheckerboardView() {
-		// Remove any existing checkerboard view to prevent stacking multiple on top of each other.
-		for subview in contentOverlayView?.subviews ?? [] where subview.identifier == Self.checkerboardViewIdentifier {
+	private func updateCheckerboardViewIfNeeded() {
+		guard let contentOverlayView else {
+			return
+		}
+
+		// Large videos can become ready before AVPlayer has computed `videoBounds`. Wait for a real rect so the checkerboard does not cover the whole player.
+		let clearRect = videoBounds
+		guard !clearRect.isEmpty else {
+			return
+		}
+
+		let existingCheckerboardViews = contentOverlayView.subviews.filter { $0.identifier == Self.checkerboardViewIdentifier }
+		let needsNewCheckerboardView = clearRect != checkerboardVideoBounds || existingCheckerboardViews.isEmpty
+		guard needsNewCheckerboardView else {
+			return
+		}
+
+		for subview in existingCheckerboardViews {
 			subview.removeFromSuperview()
 		}
 
-		let overlayView = NSHostingView(rootView: CheckerboardView(clearRect: videoBounds))
+		let overlayView = NSHostingView(rootView: CheckerboardView(clearRect: clearRect))
 		overlayView.identifier = Self.checkerboardViewIdentifier
-		contentOverlayView?.addSubview(overlayView)
+		contentOverlayView.addSubview(overlayView)
 		overlayView.constrainEdgesToSuperview()
+		checkerboardVideoBounds = clearRect
 	}
 
 	private static let checkerboardViewIdentifier = NSUserInterfaceItemIdentifier("CheckerboardView")
